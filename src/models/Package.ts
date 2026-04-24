@@ -13,7 +13,6 @@ export interface IPackage extends Document {
   endDate: string;
   identification: boolean;
   permit: string;
-  reviews: number;
   hotels: Schema.Types.ObjectId[];
   vehicles: Schema.Types.ObjectId[];
   tags?: string[];
@@ -38,7 +37,6 @@ const packageSchema = new Schema<IPackage> (
     endDate: { type: String, required: true, trim: true },
     identification: { type: Boolean, required: true, default: false },
     permit: { type: String, required: true, trim: true },
-    reviews: { type: Number, required: true, default: 0, min: 0 },
     tags: { type: [String], default: [] },
     affiliateLinks: { type: [String], default: [] },
     createdBy: { type: String, required: true, trim: true },
