@@ -1,10 +1,10 @@
 import express from 'express'
 
+import packageRoutes from './routes/package.routes'
+
 const app = express()
 
-app.get(`/`, (req, res) => {
-  console.log('Working')
-})
+app.use('/v1/api/', packageRoutes)
 
 const PORT = process.env.PORT || 8080
 
