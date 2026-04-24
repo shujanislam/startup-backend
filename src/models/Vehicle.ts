@@ -5,6 +5,7 @@ export interface IVehicle extends Document {
   carNumber: string;
   driverName?: string;
   driverPhoneNumber: string;
+  vehicleType: string;
   budget: number;
   createdAt: Date;
   updatedAt: Date;
@@ -15,6 +16,7 @@ const vehicleSchema = new Schema<IVehicle>(
     car: { type: String, required: true, trim: true },
     carNumber: { type: String, required: true, trim: true },
     driverName: { type: String, required: false, trim: true },
+    vehicleType: { type: String, required: false, trim: true },
     budget: { type: Number, required: true, trim: true },
     driverPhoneNumber: { type: String, required: true, trim: true },
   },
