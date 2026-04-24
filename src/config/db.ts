@@ -1,5 +1,7 @@
 import mongoose from 'mongoose'
 
+import logger from './logger'
+
 const connectDB = async (): Promise<void> => {
   const mongoUri = process.env.MONGODB_URI
 
@@ -13,9 +15,9 @@ const connectDB = async (): Promise<void> => {
 
   try {
     await mongoose.connect(mongoUri)
-    console.log('MongoDB connected successfully')
+    logger.info('MongoDB connected successfully')
   } catch (error) {
-    console.error('MongoDB connection failed:', error)
+    logger.error(`MongoDB connection failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
     process.exit(1)
   }
 }
