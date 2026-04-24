@@ -8,8 +8,8 @@ router.get('/get-profiles', getProfiles);
 
 router.get('/show-profile/:id', showProfile);
 
-router.get('/update-profile/:id', updateProfile);
+router.patch('/update-profile/:id', updateProfile);
 
-router.get('/delete-profile/:id', deleteProfile);
+router.delete('/delete-profile/:id', deleteProfile);
 
 export default router
