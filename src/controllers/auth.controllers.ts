@@ -121,10 +121,23 @@ const getCurrentUser = async (req: AuthenticatedRequest, res: Response) => {
 	}
 
 	try {
-		const user = await User.findOne({ firebaseId: req.user.uid })
+		let user = await User.findOne({ firebaseId: req.user.uid })
 
 		if (!user) {
-			return res.status(404).json({ message: 'User not found in database' })
+			const tokenEmail = req.user.token.email || `${req.user.uid}@firebase.local`
+
+			const generatedPassword = crypto.randomBytes(18).toString('hex')
+			const hashedPassword = await bcrypt.hash(generatedPassword, 10)
+			const fallbackName =
+				req.user.token.name || tokenEmail.split('@')[0] || 'user'
+
+			user = await User.create({
+				firebaseId: req.user.uid,
+				name: fallbackName,
+				email: tokenEmail,
+				password: hashedPassword,
+				gender: 'prefer_not_to_say',
+			})
 		}
 
 		const safeUser = sanitizeUser(user.toObject())
