@@ -4,6 +4,7 @@ import express from 'express'
 import protectedRoutes from './routes/protected'
 import authRoutes from './routes/auth.routes'
 import { firebaseAuthMiddleware } from './middleware/firebaseAuth'
+import { attachCurrentUser } from './middleware/attachCurrentUser'
 
 import connectDB from './config/db'
 
@@ -34,10 +35,10 @@ app.get('/', (_req, res) => {
   res.json({ message: 'Backend is running' })
 })
 
-app.use('/api', protectedRoutes)
-app.use('/api/auth', authRoutes)
-app.use('/api/packages', firebaseAuthMiddleware, packageRoutes)
-app.use('/api/profiles', firebaseAuthMiddleware, profileRoutes)
+app.use('/v1/api', protectedRoutes)
+app.use('/v1/api/auth', authRoutes)
+app.use('/v1/api/packages/', firebaseAuthMiddleware, attachCurrentUser, packageRoutes)
+app.use('/v1/api/profile/', firebaseAuthMiddleware, attachCurrentUser, profileRoutes)
 
 const PORT = process.env.PORT || 8080
 

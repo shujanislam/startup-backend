@@ -46,17 +46,61 @@ export const createPackageSchema = z.object({
     tags: z.array(z.string()).default([]),
     affiliateLinks: z.array(z.string()).default([]),
     additional: z.string().optional(),
-    createdBy: z.string().min(1, "CreatedBy is required"),
     hotels: z.array(z.string()).default([]),
     vehicles: z.array(z.string()).default([]),
 })
 
 export const updatePackageSchema = createPackageSchema.partial()
 
+export const sortPackageSchema = z
+    .object({
+        search: z.string().trim().min(1).optional(),
+        destination: z.string().trim().min(1).optional(),
+        season: z.string().trim().min(1).optional(),
+        minBudget: z.coerce.number().nonnegative().optional(),
+        maxBudget: z.coerce.number().nonnegative().optional(),
+        minDuration: z.coerce.number().int().positive().optional(),
+        maxDuration: z.coerce.number().int().positive().optional(),
+        tags: z
+            .string()
+            .trim()
+            .optional()
+            .transform((value) => {
+                if (!value) {
+                    return undefined
+                }
+
+                const parsedTags = value
+                    .split(',')
+                    .map((tag) => tag.trim())
+                    .filter(Boolean)
+
+                return parsedTags.length > 0 ? parsedTags : undefined
+            }),
+        sortBy: z.enum(['name', 'budget', 'duration', 'startDate', 'createdAt']).default('createdAt'),
+        order: z.enum(['asc', 'desc']).default('desc'),
+        page: z.coerce.number().int().positive().default(1),
+        limit: z.coerce.number().int().positive().max(100).default(10),
+    })
+    .refine(
+        (data) => !(data.minBudget !== undefined && data.maxBudget !== undefined && data.minBudget > data.maxBudget),
+        {
+            message: 'minBudget cannot be greater than maxBudget',
+            path: ['minBudget'],
+        }
+    )
+    .refine(
+        (data) =>
+            !(data.minDuration !== undefined && data.maxDuration !== undefined && data.minDuration > data.maxDuration),
+        {
+            message: 'minDuration cannot be greater than maxDuration',
+            path: ['minDuration'],
+        }
+    )
+
 // Review schema
 export const createReviewSchema = z.object({
     packageId: z.string().min(1, "Package ID is required"),
-    userId: z.string().min(1, "User ID is required"),
     review: z.string().min(1, "Review is required"),
     rating: z.number().min(1).max(5, "Rating must be between 1 and 5"),
 })
@@ -66,4 +110,5 @@ export type CreateUserInput = z.infer<typeof createUserSchema>
 export type UpdateUserInput = z.infer<typeof updateUserSchema>
 export type CreatePackageInput = z.infer<typeof createPackageSchema>
 export type UpdatePackageInput = z.infer<typeof updatePackageSchema>
+export type SortPackageInput = z.infer<typeof sortPackageSchema>
 export type CreateReviewInput = z.infer<typeof createReviewSchema>
