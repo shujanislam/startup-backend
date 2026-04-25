@@ -27,10 +27,10 @@ app.get('/', (_req, res) => {
   res.json({ message: 'Backend is running' })
 })
 
-app.use('/api', protectedRoutes)
-app.use('/api/auth', authRoutes)
-app.use('/api/packages', firebaseAuthMiddleware, packageRoutes)
-app.use('/api/profiles', firebaseAuthMiddleware, profileRoutes)
+app.use('/v1/api', protectedRoutes)
+app.use('/v1/api/auth', authRoutes)
+app.use('/v1/api/packages/', firebaseAuthMiddleware, packageRoutes)
+app.use('/v1/api/profile/', firebaseAuthMiddleware, profileRoutes)
 
 const PORT = process.env.PORT || 8080
 
