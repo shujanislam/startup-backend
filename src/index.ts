@@ -15,11 +15,18 @@ import profileRoutes from './routes/profile.routes'
 
 const app = express()
 
-const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'http://localhost:5173'
+const configuredOrigins = (process.env.FRONTEND_ORIGIN || '')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean)
+
+const devDefaultOrigins = ['http://localhost:5173', 'http://localhost:5175']
+const FRONTEND_ORIGINS = Array.from(new Set([...configuredOrigins, ...devDefaultOrigins]))
 
 app.use(
   cors({
-    origin: FRONTEND_ORIGIN,
+    origin: FRONTEND_ORIGINS,
+    credentials: true,
   }),
 )
 app.use(express.json())
