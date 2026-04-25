@@ -4,6 +4,7 @@ logs/
 *.tsbuildinfo
 
 .env
+.env.example
 serviceAccountKey.json
 startup-2c9aa-firebase-adminsdk-fbsvc-cf6f727bcd.json
 
