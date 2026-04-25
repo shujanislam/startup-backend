@@ -1,6 +1,7 @@
 import 'dotenv/config'
-
+import cors from 'cors'
 import express from 'express'
+import protectedRoutes from './routes/protected'
 
 import connectDB from './config/db'
 
@@ -12,11 +13,20 @@ import profileRoutes from './routes/profile.routes'
 
 const app = express()
 
+const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'http://localhost:5173'
+
+app.use(
+  cors({
+    origin: FRONTEND_ORIGIN,
+  }),
+)
 app.use(express.json())
 
-app.use('/v1/api/', packageRoutes)
+app.get('/', (_req, res) => {
+  res.json({ message: 'Backend is running' })
+})
 
-app.use('/v1/api/', profileRoutes)
+app.use('/api', protectedRoutes)
 
 const PORT = process.env.PORT || 8080
 
