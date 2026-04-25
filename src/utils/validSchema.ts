@@ -46,7 +46,6 @@ export const createPackageSchema = z.object({
     tags: z.array(z.string()).default([]),
     affiliateLinks: z.array(z.string()).default([]),
     additional: z.string().optional(),
-    createdBy: z.string().min(1, "CreatedBy is required"),
     hotels: z.array(z.string()).default([]),
     vehicles: z.array(z.string()).default([]),
 })
@@ -102,7 +101,6 @@ export const sortPackageSchema = z
 // Review schema
 export const createReviewSchema = z.object({
     packageId: z.string().min(1, "Package ID is required"),
-    userId: z.string().min(1, "User ID is required"),
     review: z.string().min(1, "Review is required"),
     rating: z.number().min(1).max(5, "Rating must be between 1 and 5"),
 })

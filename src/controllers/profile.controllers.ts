@@ -1,4 +1,4 @@
-import { createUserSchema, updateUserSchema, validateSchema } from '../utils/validSchema';
+import { updateUserSchema, validateSchema } from '../utils/validSchema';
 
 import { Request, Response } from 'express';
 
@@ -11,9 +11,7 @@ const getProfiles = async (req: Request, res: Response) => {
   
   const profiles = await User.find({})
 
-  logger.info(profiles)
-
-  res.status(200).json({ message: 'getProfiles working' })
+  res.status(200).json(profiles)
 }
 
 const showProfile = async (req: Request, res: Response) => {
@@ -22,15 +20,20 @@ const showProfile = async (req: Request, res: Response) => {
   const profileId = req.params.id
 
   const profile = await User.find({ id: profileId })
-
-  logger.info(profile)
-  
-  res.status(200).json({ message: 'showProfile working' })
+ 
+  res.status(200).json(profile)
 }
 
 const updateProfile = async (req: Request, res: Response) => {
   const profileId = req.params.id
-  logger.info(`updateProfile endpoint called for id: ${profileId}`)
+
+  if (!req.userId) {
+    return res.status(401).json({ message: 'Unauthorized' })
+  }
+
+  if (profileId !== req.userId) {
+    return res.status(403).json({ message: 'Forbidden: you can update only your profile' })
+  }
 
   const validation = validateSchema(updateUserSchema, req.body);
   
@@ -64,8 +67,16 @@ const updateProfile = async (req: Request, res: Response) => {
 
 const deleteProfile = async (req: Request, res: Response) => {
   logger.info(`deleteProfile endpoint called for id: ${req.params.id}`)
+
+  if (!req.userId) {
+    return res.status(401).json({ message: 'Unauthorized' })
+  }
   
   const profileId = req.params.id
+
+  if (profileId !== req.userId) {
+    return res.status(403).json({ message: 'Forbidden: you can delete only your profile' })
+  }
 
   const deletedProfile = await User.findByIdAndDelete(profileId)
 
