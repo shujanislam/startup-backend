@@ -2,13 +2,14 @@ import 'dotenv/config'
 import cors from 'cors'
 import express from 'express'
 import protectedRoutes from './routes/protected'
+import authRoutes from './routes/auth.routes'
+import { firebaseAuthMiddleware } from './middleware/firebaseAuth'
 
 import connectDB from './config/db'
 
 import logger from './config/logger'
 
 import packageRoutes from './routes/package.routes'
-
 import profileRoutes from './routes/profile.routes'
 
 const app = express()
@@ -27,6 +28,9 @@ app.get('/', (_req, res) => {
 })
 
 app.use('/api', protectedRoutes)
+app.use('/api/auth', authRoutes)
+app.use('/api/packages', firebaseAuthMiddleware, packageRoutes)
+app.use('/api/profiles', firebaseAuthMiddleware, profileRoutes)
 
 const PORT = process.env.PORT || 8080
 
