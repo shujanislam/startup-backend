@@ -60,48 +60,6 @@ const updateProfile = async (req: Request, res: Response) => {
         logger.error(`Error updating profile: ${error}`)
         return res.status(500).json({ message: 'Failed to update profile' })
     }
-
-
-  // if (!profileId) {
-  //   return res.status(400).json({ message: 'Profile id is required' })
-  // }
-
-  // const allowedFields = ['name', 'email', 'password', 'gender', 'profilePicture', 'bio']
-  // const payload = req.body as Record<string, unknown>
-  // const updateData: Record<string, unknown> = {}
-
-  // for (const field of allowedFields) {
-  //   if (Object.prototype.hasOwnProperty.call(payload, field)) {
-  //     updateData[field] = payload[field]
-  //   }
-  // }
-
-  // if (Object.keys(updateData).length === 0) {
-  //   return res.status(400).json({ message: 'No valid fields provided for update' })
-  // }
-
-  // try {
-  //   const updatedProfile = await User.findByIdAndUpdate(profileId, updateData, {
-  //     new: true,
-  //     runValidators: true,
-  //   }).select('-password')
-
-  //   if (!updatedProfile) {
-  //     return res.status(404).json({ message: 'Profile not found' })
-  //   }
-
-  //   return res.status(200).json({
-  //     message: 'Profile updated successfully',
-  //     data: updatedProfile,
-  //   })
-  // } catch (error) {
-  //   if ((error as { code?: number }).code === 11000) {
-  //     return res.status(409).json({ message: 'Email already exists' })
-  //   }
-
-  //   logger.error(`Error updating profile: ${error instanceof Error ? error.message : 'Unknown error'}`)
-  //   return res.status(500).json({ message: 'Failed to update profile' })
-  // }
 }
 
 const deleteProfile = async (req: Request, res: Response) => {
