@@ -3,6 +3,8 @@ dist/
 *.tsbuildinfo
 
 .env
+serviceAccountKey.json
+startup-2c9aa-firebase-adminsdk-fbsvc-cf6f727bcd.json
 
 npm-debug.log*
 yarn-debug.log*
