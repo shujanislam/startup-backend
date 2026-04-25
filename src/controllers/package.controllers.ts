@@ -5,6 +5,7 @@ import logger from '../config/logger'
 import Package from '../models/Package' 
 
 import PackageReview from '../models/PackageReviews' 
+import { createPackageSchema, validateSchema } from '../utils/validSchema'
 
 const getPackages = async (req: Request, res: Response) => {
   const packages = await Package.find({})
@@ -32,82 +33,102 @@ const discoverPackage = (req: Request, res: Response) => {
 const postPackage = async (req: Request, res: Response) => {
   logger.info('postPackage endpoint called')
 
-  try {
-    const {
-      name,
-      description,
-      coverImage,
-      season,
-      budget,
-      destination,
-      spots,
-      duration,
-      startDate,
-      endDate,
-      identification,
-      permit,
-      tags,
-      affiliateLinks,
-      additional,
-      createdBy,
-      hotels,
-      vehicles,
-    } = req.body
+  const validation = validateSchema(createPackageSchema, req.body)
 
-    const requiredFields = [
-      'name',
-      'description',
-      'coverImage',
-      'season',
-      'budget',
-      'destination',
-      'spots',
-      'duration',
-      'startDate',
-      'endDate',
-      'permit',
-      'createdBy',
-    ]
-
-    const missingFields = requiredFields.filter((field) => req.body[field] === undefined || req.body[field] === null || req.body[field] === '')
-
-    if (missingFields.length > 0) {
-      logger.warn(`postPackage validation failed. Missing fields: ${missingFields.join(', ')}`)
-      return res.status(400).json({
-        message: 'Missing required fields',
-        missingFields,
-      })
-    }
-
-    const createdPackage = await Package.create({
-      name,
-      description,
-      coverImage,
-      season,
-      budget,
-      destination,
-      spots: Array.isArray(spots) ? spots : [],
-      duration,
-      startDate,
-      endDate,
-      identification: identification ?? false,
-      permit,
-      tags: Array.isArray(tags) ? tags : [],
-      affiliateLinks: Array.isArray(affiliateLinks) ? affiliateLinks : [],
-      additional,
-      createdBy,
-      hotels: Array.isArray(hotels) ? hotels : [],
-      vehicles: Array.isArray(vehicles) ? vehicles : [],
+  if(!validation.success){
+    return res.status(400).json({
+      message: "Validation Failed",
+      errors: validation.errors
     })
+  }
 
+  try{
+    const createdPackage = await Package.create(validation.data)
     return res.status(201).json({
-      message: 'Package created successfully',
+      message: "Package created successfully",
       data: createdPackage,
     })
-  } catch (error) {
-    logger.error(`Error creating package: ${error instanceof Error ? error.message : 'Unknown error'}`)
-    return res.status(500).json({ message: 'Failed to create package' })
+  }catch(error){
+    logger.error(`Error creating package: ${error}`)
+    return res.status(500).json({ message: "Failed to create Package" })
   }
+
+  // try {
+  //   const {
+  //     name,
+  //     description,
+  //     coverImage,
+  //     season,
+  //     budget,
+  //     destination,
+  //     spots,
+  //     duration,
+  //     startDate,
+  //     endDate,
+  //     identification,
+  //     permit,
+  //     tags,
+  //     affiliateLinks,
+  //     additional,
+  //     createdBy,
+  //     hotels,
+  //     vehicles,
+  //   } = req.body
+
+  //   const requiredFields = [
+  //     'name',
+  //     'description',
+  //     'coverImage',
+  //     'season',
+  //     'budget',
+  //     'destination',
+  //     'spots',
+  //     'duration',
+  //     'startDate',
+  //     'endDate',
+  //     'permit',
+  //     'createdBy',
+  //   ]
+
+  //   const missingFields = requiredFields.filter((field) => req.body[field] === undefined || req.body[field] === null || req.body[field] === '')
+
+  //   if (missingFields.length > 0) {
+  //     logger.warn(`postPackage validation failed. Missing fields: ${missingFields.join(', ')}`)
+  //     return res.status(400).json({
+  //       message: 'Missing required fields',
+  //       missingFields,
+  //     })
+  //   }
+
+  //   const createdPackage = await Package.create({
+  //     name,
+  //     description,
+  //     coverImage,
+  //     season,
+  //     budget,
+  //     destination,
+  //     spots: Array.isArray(spots) ? spots : [],
+  //     duration,
+  //     startDate,
+  //     endDate,
+  //     identification: identification ?? false,
+  //     permit,
+  //     tags: Array.isArray(tags) ? tags : [],
+  //     affiliateLinks: Array.isArray(affiliateLinks) ? affiliateLinks : [],
+  //     additional,
+  //     createdBy,
+  //     hotels: Array.isArray(hotels) ? hotels : [],
+  //     vehicles: Array.isArray(vehicles) ? vehicles : [],
+  //   })
+
+  //   return res.status(201).json({
+  //     message: 'Package created successfully',
+  //     data: createdPackage,
+  //   })
+  // } catch (error) {
+  //   logger.error(`Error creating package: ${error instanceof Error ? error.message : 'Unknown error'}`)
+  //   return res.status(500).json({ message: 'Failed to create package' })
+  // }
 }
 
 const updatePackage = async (req: Request, res: Response) => {
