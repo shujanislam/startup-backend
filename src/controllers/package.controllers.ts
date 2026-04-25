@@ -6,7 +6,7 @@ import Package from '../models/Package'
 
 import PackageReview from '../models/PackageReviews' 
 
-import { createPackageSchema, validateSchema, updatePackageSchema, createReviewSchema } from '../utils/validSchema'
+import { createPackageSchema, validateSchema, updatePackageSchema, createReviewSchema, sortPackageSchema } from '../utils/validSchema'
 
 const getPackages = async (req: Request, res: Response) => {
   const packages = await Package.find({})
@@ -26,9 +26,95 @@ const viewPackage = async (req: Request, res: Response) => {
   res.status(200).json({ message: 'viewPackage working' })
 }
 
-const discoverPackage = (req: Request, res: Response) => {
-  logger.info(`discoverPackage endpoint called for id: ${req.params.id || 'not provided'}`)
-  res.status(200).json({ message: 'viewPackage working' })
+const discoverPackage = async (req: Request, res: Response) => {
+  logger.info('discoverPackage endpoint called')
+
+  const validation = validateSchema(sortPackageSchema, req.query)
+
+  if (!validation.success) {
+    return res.status(400).json({
+      message: 'Validation failed',
+      errors: validation.errors,
+    })
+  }
+
+  const {
+    search,
+    destination,
+    season,
+    minBudget,
+    maxBudget,
+    minDuration,
+    maxDuration,
+    tags,
+    sortBy,
+    order,
+    page,
+    limit,
+  } = validation.data
+
+  try {
+    const query: Record<string, unknown> = {}
+
+    if (search) {
+      query.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { description: { $regex: search, $options: 'i' } },
+        { destination: { $regex: search, $options: 'i' } },
+      ]
+    }
+
+    if (destination) {
+      query.destination = { $regex: destination, $options: 'i' }
+    }
+
+    if (season) {
+      query.season = { $regex: season, $options: 'i' }
+    }
+
+    if (minBudget !== undefined || maxBudget !== undefined) {
+      query.budget = {
+        ...(minBudget !== undefined ? { $gte: minBudget } : {}),
+        ...(maxBudget !== undefined ? { $lte: maxBudget } : {}),
+      }
+    }
+
+    if (minDuration !== undefined || maxDuration !== undefined) {
+      query.duration = {
+        ...(minDuration !== undefined ? { $gte: minDuration } : {}),
+        ...(maxDuration !== undefined ? { $lte: maxDuration } : {}),
+      }
+    }
+
+    if (tags && tags.length > 0) {
+      query.tags = { $in: tags }
+    }
+
+    const sortOrder = order === 'asc' ? 1 : -1
+    const skip = (page - 1) * limit
+
+    const [packages, total] = await Promise.all([
+      Package.find(query)
+        .sort({ [sortBy]: sortOrder })
+        .skip(skip)
+        .limit(limit),
+      Package.countDocuments(query),
+    ])
+
+    return res.status(200).json({
+      message: 'Packages fetched successfully',
+      data: packages,
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    })
+  } catch (error) {
+    logger.error(`Error fetching packages: ${error}`)
+    return res.status(500).json({ message: 'Failed to fetch packages' })
+  }
 }
 
 const postPackage = async (req: Request, res: Response) => {

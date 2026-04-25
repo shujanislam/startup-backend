@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { createLogger, format, transports } from 'winston'
+import type { TransformableInfo } from 'logform'
 
 const logsDir = path.join(process.cwd(), 'logs')
 
@@ -13,7 +14,12 @@ const logger = createLogger({
   format: format.combine(
     format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
     format.errors({ stack: true }),
-    format.printf(({ timestamp, level, message, stack }) => {
+    format.printf((info: TransformableInfo) => {
+      const { timestamp, level, message, stack } = info as TransformableInfo & {
+        timestamp?: string
+        stack?: string
+      }
+
       if (stack) {
         return `${timestamp} [${level}] ${message}\n${stack}`
       }
