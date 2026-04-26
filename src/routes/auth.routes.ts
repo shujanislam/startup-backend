@@ -9,11 +9,12 @@ import { firebaseAuthMiddleware } from '../middleware/firebaseAuth'
 
 const authRoutes = Router()
 
-authRoutes.use(firebaseAuthMiddleware)
-
+// Register does NOT require Firebase auth — the backend creates the Firebase user
 authRoutes.post('/register', registerUser)
-authRoutes.post('/login', loginUser)
-authRoutes.post('/sync', syncFirebaseUser)
-authRoutes.get('/me', getCurrentUser)
+
+// All other routes require an authenticated Firebase user
+authRoutes.post('/login', firebaseAuthMiddleware, loginUser)
+authRoutes.post('/sync', firebaseAuthMiddleware, syncFirebaseUser)
+authRoutes.get('/me', firebaseAuthMiddleware, getCurrentUser)
 
 export default authRoutes
