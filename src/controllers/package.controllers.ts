@@ -5,11 +5,17 @@ import logger from '../config/logger'
 import Package from '../models/Package' 
 
 import PackageReview from '../models/PackageReviews' 
+import type { PopulateOptions } from 'mongoose'
 
 import { createPackageSchema, validateSchema, updatePackageSchema, createReviewSchema, sortPackageSchema } from '../utils/validSchema'
 
+const packagePopulateConfig: PopulateOptions[] = [
+  { path: 'hotels', select: 'name phoneNumber address photos budget' },
+  { path: 'vehicles', select: 'car carNumber driverName driverPhoneNumber vehicleType budget' },
+]
+
 const getPackages = async (req: Request, res: Response) => {
-  const packages = await Package.find({})
+  const packages = await Package.find({}).populate(packagePopulateConfig)
 
   res.status(200).json(packages)
 }
@@ -17,7 +23,7 @@ const getPackages = async (req: Request, res: Response) => {
 const viewPackage = async (req: Request, res: Response) => { 
   const packageId = req.params.id 
 
-  const packageData = await Package.findById(packageId)
+  const packageData = await Package.findById(packageId).populate(packagePopulateConfig)
 
   res.status(200).json(packageData)
 }
@@ -91,6 +97,7 @@ const discoverPackage = async (req: Request, res: Response) => {
 
     const [packages, total] = await Promise.all([
       Package.find(query)
+        .populate(packagePopulateConfig)
         .sort({ [sortBy]: sortOrder })
         .skip(skip)
         .limit(limit),
@@ -134,9 +141,12 @@ const postPackage = async (req: Request, res: Response) => {
       ...validation.data,
       createdBy: req.userId,
     })
+
+    const populatedPackage = await Package.findById(createdPackage._id).populate(packagePopulateConfig)
+
     return res.status(201).json({
       message: "Package created successfully",
-      data: createdPackage,
+      data: populatedPackage ?? createdPackage,
     })
   }catch(error){
     logger.error(`Error creating package: ${error}`)
@@ -191,7 +201,7 @@ const updatePackage = async (req: Request, res: Response) => {
       packageId,
       updateData,
       { new: true, runValidators: true }
-    )
+    ).populate(packagePopulateConfig)
 
     if (!updatedPackage) {
       return res.status(404).json({ message: 'Package not found' })
@@ -258,7 +268,7 @@ const deletePackage = async (req: Request, res: Response) => {
   const packageId = req.params.id
 
   const existingPackage = await Package.findById(packageId)
-
+  
   if (!existingPackage) {
     return res.status(404).json({ message: 'Package not found' })
   }

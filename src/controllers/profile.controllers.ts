@@ -19,7 +19,7 @@ const showProfile = async (req: Request, res: Response) => {
 
   const profileId = req.params.id
 
-  const profile = await User.find({ id: profileId })
+  const profile = await User.findById(profileId)
  
   res.status(200).json(profile)
 }

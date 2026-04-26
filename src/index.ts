@@ -12,6 +12,8 @@ import logger from './config/logger'
 
 import packageRoutes from './routes/package.routes'
 import profileRoutes from './routes/profile.routes'
+import hotelRoutes from './routes/hotel.routes'
+import vehicleRoutes from './routes/vehicle.routes'
 
 const app = express()
 
@@ -39,6 +41,8 @@ app.use('/v1/api', protectedRoutes)
 app.use('/v1/api/auth', authRoutes)
 app.use('/v1/api/packages/', firebaseAuthMiddleware, attachCurrentUser, packageRoutes)
 app.use('/v1/api/profile/', firebaseAuthMiddleware, attachCurrentUser, profileRoutes)
+app.use('/v1/api/hotels/', firebaseAuthMiddleware, attachCurrentUser, hotelRoutes)
+app.use('/v1/api/vehicles/', firebaseAuthMiddleware, attachCurrentUser, vehicleRoutes)
 
 const PORT = process.env.PORT || 8080
 
