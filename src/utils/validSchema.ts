@@ -52,6 +52,27 @@ export const createPackageSchema = z.object({
 
 export const updatePackageSchema = createPackageSchema.partial()
 
+export const createHotelSchema = z.object({
+    name: z.string().min(1, 'Hotel name is required'),
+    phoneNumber: z.string().min(1, 'Hotel phone number is required'),
+    address: z.string().min(1, 'Hotel address is required'),
+    photos: z.array(z.string()).default([]),
+    budget: z.number().min(0, 'Hotel budget must be positive'),
+})
+
+export const updateHotelSchema = createHotelSchema.partial()
+
+export const createVehicleSchema = z.object({
+    car: z.string().min(1, 'Vehicle name is required'),
+    carNumber: z.string().min(1, 'Vehicle number is required'),
+    driverName: z.string().optional(),
+    driverPhoneNumber: z.string().min(1, 'Driver phone number is required'),
+    vehicleType: z.string().optional(),
+    budget: z.number().min(0, 'Vehicle budget must be positive'),
+})
+
+export const updateVehicleSchema = createVehicleSchema.partial()
+
 export const sortPackageSchema = z
     .object({
         search: z.string().trim().min(1).optional(),
@@ -110,5 +131,9 @@ export type CreateUserInput = z.infer<typeof createUserSchema>
 export type UpdateUserInput = z.infer<typeof updateUserSchema>
 export type CreatePackageInput = z.infer<typeof createPackageSchema>
 export type UpdatePackageInput = z.infer<typeof updatePackageSchema>
+export type CreateHotelInput = z.infer<typeof createHotelSchema>
+export type UpdateHotelInput = z.infer<typeof updateHotelSchema>
+export type CreateVehicleInput = z.infer<typeof createVehicleSchema>
+export type UpdateVehicleInput = z.infer<typeof updateVehicleSchema>
 export type SortPackageInput = z.infer<typeof sortPackageSchema>
 export type CreateReviewInput = z.infer<typeof createReviewSchema>
