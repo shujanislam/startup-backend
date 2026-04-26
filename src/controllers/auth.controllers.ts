@@ -1,6 +1,7 @@
 import bcrypt from 'bcryptjs'
 import crypto from 'node:crypto'
-import type { Response } from 'express'
+import type { Request, Response } from 'express'
+import { admin } from '../config/firebaseAdmin'
 import logger from '../config/logger'
 import User from '../models/User'
 import type { AuthenticatedRequest } from '../types/auth'
@@ -11,11 +12,7 @@ const sanitizeUser = (user: { [key: string]: unknown }) => {
 	return safeUser
 }
 
-const registerUser = async (req: AuthenticatedRequest, res: Response) => {
-	if (!req.user) {
-		return res.status(401).json({ message: 'Unauthorized' })
-	}
-
+const registerUser = async (req: Request, res: Response) => {
 	const validation = validateSchema(createUserSchema, req.body)
 
 	if (!validation.success) {
@@ -27,41 +24,90 @@ const registerUser = async (req: AuthenticatedRequest, res: Response) => {
 
 	const { name, email, password, gender } = validation.data
 
-	if (req.user.token.email && req.user.token.email !== email) {
-		return res.status(400).json({
-			message: 'Email must match authenticated Firebase user email',
-		})
-	}
+	let firebaseUid: string
+	let createdFirebaseUser = false
 
 	try {
-		const existingUser = await User.findOne({
-			$or: [{ email }, { firebaseId: req.user.uid }],
-		})
+		// Step 1: Create Firebase user (or reuse existing from a previous partial attempt)
+		try {
+			const firebaseUser = await admin.auth().createUser({
+				email,
+				password,
+				displayName: name,
+			})
+			firebaseUid = firebaseUser.uid
+			createdFirebaseUser = true
+		} catch (firebaseError: unknown) {
+			const code = (firebaseError as { code?: string }).code
 
-		if (existingUser) {
-			return res.status(409).json({ message: 'User already exists' })
+			if (code === 'auth/email-already-exists') {
+				// Reuse existing Firebase user from a previous failed attempt
+				const existingFirebaseUser = await admin.auth().getUserByEmail(email)
+				firebaseUid = existingFirebaseUser.uid
+				createdFirebaseUser = false
+			} else {
+				// Ambiguous or transient error — re-check Firebase before giving up
+				try {
+					const existingFirebaseUser = await admin.auth().getUserByEmail(email)
+					firebaseUid = existingFirebaseUser.uid
+					createdFirebaseUser = false
+				} catch {
+					throw firebaseError
+				}
+			}
 		}
 
+		// Step 2: Check if MongoDB user already exists (idempotent)
+		const existingMongoUser = await User.findOne({
+			$or: [{ email }, { firebaseId: firebaseUid }],
+		})
+
+		if (existingMongoUser) {
+			const customToken = await admin.auth().createCustomToken(firebaseUid)
+
+			return res.status(200).json({
+				message: 'User already registered',
+				user: sanitizeUser(existingMongoUser.toObject()),
+				customToken,
+			})
+		}
+
+		// Step 3: Create MongoDB user
 		const hashedPassword = await bcrypt.hash(password, 10)
 
-		const createdUser = await User.create({
-			firebaseId: req.user.uid,
-			name,
-			email,
-			password: hashedPassword,
-			gender,
-		})
+		try {
+			const createdUser = await User.create({
+				firebaseId: firebaseUid,
+				name,
+				email,
+				password: hashedPassword,
+				gender,
+			})
 
-		return res.status(201).json({
-			message: 'User registered successfully',
-			user: sanitizeUser(createdUser.toObject()),
-		})
+			const customToken = await admin.auth().createCustomToken(firebaseUid)
+
+			return res.status(201).json({
+				message: 'User registered successfully',
+				user: sanitizeUser(createdUser.toObject()),
+				customToken,
+			})
+		} catch (mongoError) {
+			// Compensating: remove partial MongoDB record best-effort
+			await User.deleteOne({ firebaseId: firebaseUid }).catch(() => {})
+
+			// Compensating: delete Firebase user only if this request created it
+			if (createdFirebaseUser) {
+				await admin.auth().deleteUser(firebaseUid).catch(() => {})
+			}
+
+			throw mongoError
+		}
 	} catch (error) {
 		logger.error(
 			`Error registering user: ${error instanceof Error ? error.message : 'Unknown error'}`,
 		)
 
-		return res.status(500).json({ message: 'Failed to register user' })
+		return res.status(500).json({ message: 'Failed to register user. Please try again.' })
 	}
 }
 
