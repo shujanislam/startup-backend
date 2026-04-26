@@ -8,6 +8,7 @@ export interface IUser extends Document {
   profilePicture?: string;
   bio?: string;
   gender: string;
+  onboardingComplete?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -20,7 +21,8 @@ const userSchema = new Schema<IUser>(
     password: { type: String, required: true },
     gender: { type: String, required: true },
     profilePicture: { type: String, default: '' },
-    bio: { type: String, trim: true}
+    bio: { type: String, trim: true},
+    onboardingComplete: { type: Boolean, required: false }
   },
   {
     timestamps: true,
