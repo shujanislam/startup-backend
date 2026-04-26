@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express'
 import Vehicle from '../models/Vehicle'
+import Package from '../models/Package'
 import logger from '../config/logger'
 import { createVehicleSchema, updateVehicleSchema, validateSchema } from '../utils/validSchema'
 
@@ -29,6 +30,10 @@ const viewVehicle = async (req: Request, res: Response) => {
 }
 
 const postVehicle = async (req: Request, res: Response) => {
+  if (!req.userId) {
+    return res.status(401).json({ message: 'Unauthorized' })
+  }
+
   const validation = validateSchema(createVehicleSchema, req.body)
 
   if (!validation.success) {
@@ -39,7 +44,11 @@ const postVehicle = async (req: Request, res: Response) => {
   }
 
   try {
-    const createdVehicle = await Vehicle.create(validation.data)
+    const createdVehicle = await Vehicle.create({
+      ...validation.data,
+      createdBy: req.userId,
+    })
+
     return res.status(201).json({
       message: 'Vehicle created successfully',
       data: createdVehicle,
@@ -51,6 +60,10 @@ const postVehicle = async (req: Request, res: Response) => {
 }
 
 const updateVehicle = async (req: Request, res: Response) => {
+  if (!req.userId) {
+    return res.status(401).json({ message: 'Unauthorized' })
+  }
+
   const validation = validateSchema(updateVehicleSchema, req.body)
 
   if (!validation.success) {
@@ -65,10 +78,27 @@ const updateVehicle = async (req: Request, res: Response) => {
   }
 
   try {
-    const updatedVehicle = await Vehicle.findByIdAndUpdate(req.params.id, validation.data, {
+    const existingVehicle = await Vehicle.findById(req.params.id)
+
+    if (!existingVehicle) {
+      return res.status(404).json({ message: 'Vehicle not found' })
+    }
+
+    if (existingVehicle.createdBy !== req.userId) {
+      return res.status(403).json({ message: 'Forbidden: you cannot update this vehicle' })
+    }
+
+    const updatedVehicle = await Vehicle.findByIdAndUpdate(
+      req.params.id,
+      {
+        ...validation.data,
+        createdBy: req.userId,
+      },
+      {
       new: true,
       runValidators: true,
-    })
+      }
+    )
 
     if (!updatedVehicle) {
       return res.status(404).json({ message: 'Vehicle not found' })
@@ -85,12 +115,31 @@ const updateVehicle = async (req: Request, res: Response) => {
 }
 
 const deleteVehicle = async (req: Request, res: Response) => {
+  if (!req.userId) {
+    return res.status(401).json({ message: 'Unauthorized' })
+  }
+
   try {
+    const existingVehicle = await Vehicle.findById(req.params.id)
+
+    if (!existingVehicle) {
+      return res.status(404).json({ message: 'Vehicle not found' })
+    }
+
+    if (existingVehicle.createdBy !== req.userId) {
+      return res.status(403).json({ message: 'Forbidden: you cannot delete this vehicle' })
+    }
+
     const deletedVehicle = await Vehicle.findByIdAndDelete(req.params.id)
 
     if (!deletedVehicle) {
       return res.status(404).json({ message: 'Vehicle not found' })
     }
+
+    await Package.updateMany(
+      { vehicles: deletedVehicle._id },
+      { $pull: { vehicles: deletedVehicle._id } }
+    )
 
     return res.status(200).json({ message: 'Vehicle deleted successfully' })
   } catch (error) {

@@ -9,6 +9,7 @@ export interface IUser extends Document {
   bio?: string;
   gender: string;
   onboardingComplete?: boolean;
+  tags?: string[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -22,7 +23,8 @@ const userSchema = new Schema<IUser>(
     gender: { type: String, required: true },
     profilePicture: { type: String, default: '' },
     bio: { type: String, trim: true},
-    onboardingComplete: { type: Boolean, required: false }
+    onboardingComplete: { type: Boolean, required: false },
+    tags: { type: [String], default: [] }
   },
   {
     timestamps: true,

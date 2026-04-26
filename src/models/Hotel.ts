@@ -6,6 +6,7 @@ export interface IHotel extends Document {
   address: string;
   photos?: string[];
   budget: number;
+  createdBy: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -17,6 +18,7 @@ const hotelSchema = new Schema<IHotel>(
     address: { type: String, required: true, trim: true },
     photos: { type: [String], required: true, default: [] },
     budget: { type: Number, required: true, trim: true },
+    createdBy: { type: String, required: true, trim: true },
   },
   {
     timestamps: true,
