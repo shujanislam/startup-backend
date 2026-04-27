@@ -292,19 +292,35 @@ const deletePackage = async (req: Request, res: Response) => {
 }
 
 const approvePackage = async(req: Request, res: Response) => {
-  if(!req.userId){
+  if (!req.userId) {
     return res.status(401).json({ message: 'Unauthorized' })
   }
-  
-  const roleCheck = await checkAdminRole(req.userId)
 
-  if(roleCheck.ok == true && roleCheck.status == 200 ) {
-    const approvedPackage = await Package.findByIdAndUpdate(req.params.id, { approved: true }, { new: true, runValidators: true }) 
+  try {
+    const roleCheck = await checkAdminRole(req.userId)
 
-    if(!approvedPackage) return res.status(404).json({ message: 'Package not updated '})
+    if (!roleCheck.ok) {
+      return res.status(roleCheck.status).json({ message: roleCheck.message })
+    }
 
-    return res.status(200).json({ message: 'Package approved successfully' })
+    const approvedPackage = await Package.findByIdAndUpdate(
+      req.params.id,
+      { approved: true },
+      { new: true, runValidators: true }
+    )
+
+    if (!approvedPackage) {
+      return res.status(404).json({ message: 'Package not found' })
+    }
+
+    return res.status(200).json({
+      message: 'Package approved successfully',
+      data: approvedPackage,
+    })
+  } catch (error) {
+    logger.error(`Error approving package: ${error}`)
+    return res.status(500).json({ message: 'Failed to approve package' })
   }
 }
 
-export { getPackages, viewPackage, discoverPackage, postPackage, updatePackage, postPackageReview, deletePackage, approvedPackage }
+export { getPackages, viewPackage, discoverPackage, postPackage, updatePackage, postPackageReview, deletePackage, approvePackage }

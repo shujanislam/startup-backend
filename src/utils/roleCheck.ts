@@ -47,7 +47,7 @@ export const checkAdminRole = async (userId : string) : Promise<RoleCheckResult>
     logger.error(`checkAdminRole failed: ${err instanceof Error ? err.message : 'Unknown error'}`)
     return {
       ok: false,
-      status: 401,
+      status: 500,
       message: 'Error while checking admin role'
     } 
   }

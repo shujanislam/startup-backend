@@ -18,6 +18,6 @@ router.post('/post-package-review', postPackageReview);
 
 router.delete('/delete-package/:id', deletePackage);
 
-router.post('/approve-package', approvePackage);
+router.patch('/approve-package/:id', approvePackage);
 
 export default router
