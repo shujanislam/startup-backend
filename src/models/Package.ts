@@ -19,6 +19,7 @@ export interface IPackage extends Document {
   affiliateLinks?: string[];
   additional?: string;
   createdBy: string;
+  approved: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -42,7 +43,8 @@ const packageSchema = new Schema<IPackage> (
     createdBy: { type: String, required: true, trim: true },
     additional: { type: String, trim: true },
     hotels: [{ type: Schema.Types.ObjectId, ref: 'Hotel', default: [] }],
-    vehicles: [{ type: Schema.Types.ObjectId, ref: 'Vehicle', default: [] }],
+    vehicles: [{ type: Schema.Types.ObjectId, ref: 'Vehicle', default: [] }], 
+    approved: { type: Boolean, required: true, default: false },
   },
   {
     timestamps: true,

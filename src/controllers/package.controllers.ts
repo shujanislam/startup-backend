@@ -9,6 +9,8 @@ import type { PopulateOptions } from 'mongoose'
 
 import { createPackageSchema, validateSchema, updatePackageSchema, createReviewSchema, sortPackageSchema } from '../utils/validSchema'
 
+import { checkAdminRole } from '../utils/roleCheck'
+
 const packagePopulateConfig: PopulateOptions[] = [
   { path: 'hotels', select: 'name phoneNumber address photos budget' },
   { path: 'vehicles', select: 'car carNumber driverName driverPhoneNumber vehicleType budget' },
@@ -289,4 +291,20 @@ const deletePackage = async (req: Request, res: Response) => {
   res.status(200).json({ message: 'deletePackage working' })
 }
 
-export { getPackages, viewPackage, discoverPackage, postPackage, updatePackage, postPackageReview, deletePackage }
+const approvePackage = async(req: Request, res: Response) => {
+  if(!req.userId){
+    return res.status(401).json({ message: 'Unauthorized' })
+  }
+  
+  const roleCheck = await checkAdminRole(req.userId)
+
+  if(roleCheck.ok == true && roleCheck.status == 200 ) {
+    const approvedPackage = await Package.findByIdAndUpdate(req.params.id, { approved: true }, { new: true, runValidators: true }) 
+
+    if(!approvedPackage) return res.status(404).json({ message: 'Package not updated '})
+
+    return res.status(200).json({ message: 'Package approved successfully' })
+  }
+}
+
+export { getPackages, viewPackage, discoverPackage, postPackage, updatePackage, postPackageReview, deletePackage, approvedPackage }
