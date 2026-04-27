@@ -11,7 +11,6 @@ const roleSchema = new Schema<IRole>(
   {
     name: { type: String, required: true, trim: true },
     permissions: { type: [String], required: true, trim: true },
-    createdBy: { type: String, required: true, trim: true },
   },
   {
     timestamps: true,
@@ -20,4 +19,4 @@ const roleSchema = new Schema<IRole>(
 
 const Role = models.Role || model<IRole>('Role', roleSchema)
 
-export default roleSchema;
+export default Role
