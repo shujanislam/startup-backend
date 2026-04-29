@@ -1,6 +1,5 @@
 import type { Request, Response } from 'express'
 import Hotel from '../models/Hotel'
-import Package from '../models/Package'
 import logger from '../config/logger'
 import { createHotelSchema, updateHotelSchema, validateSchema } from '../utils/validSchema'
 
@@ -30,10 +29,6 @@ const viewHotel = async (req: Request, res: Response) => {
 }
 
 const postHotel = async (req: Request, res: Response) => {
-  if (!req.userId) {
-    return res.status(401).json({ message: 'Unauthorized' })
-  }
-
   const validation = validateSchema(createHotelSchema, req.body)
 
   if (!validation.success) {
@@ -44,11 +39,7 @@ const postHotel = async (req: Request, res: Response) => {
   }
 
   try {
-    const createdHotel = await Hotel.create({
-      ...validation.data,
-      createdBy: req.userId,
-    })
-
+    const createdHotel = await Hotel.create(validation.data)
     return res.status(201).json({
       message: 'Hotel created successfully',
       data: createdHotel,
@@ -60,10 +51,6 @@ const postHotel = async (req: Request, res: Response) => {
 }
 
 const updateHotel = async (req: Request, res: Response) => {
-  if (!req.userId) {
-    return res.status(401).json({ message: 'Unauthorized' })
-  }
-
   const validation = validateSchema(updateHotelSchema, req.body)
 
   if (!validation.success) {
@@ -78,27 +65,10 @@ const updateHotel = async (req: Request, res: Response) => {
   }
 
   try {
-    const existingHotel = await Hotel.findById(req.params.id)
-
-    if (!existingHotel) {
-      return res.status(404).json({ message: 'Hotel not found' })
-    }
-
-    if (existingHotel.createdBy !== req.userId) {
-      return res.status(403).json({ message: 'Forbidden: you cannot update this hotel' })
-    }
-
-    const updatedHotel = await Hotel.findByIdAndUpdate(
-      req.params.id,
-      {
-        ...validation.data,
-        createdBy: req.userId,
-      },
-      {
+    const updatedHotel = await Hotel.findByIdAndUpdate(req.params.id, validation.data, {
       new: true,
       runValidators: true,
-      }
-    )
+    })
 
     if (!updatedHotel) {
       return res.status(404).json({ message: 'Hotel not found' })
@@ -115,31 +85,12 @@ const updateHotel = async (req: Request, res: Response) => {
 }
 
 const deleteHotel = async (req: Request, res: Response) => {
-  if (!req.userId) {
-    return res.status(401).json({ message: 'Unauthorized' })
-  }
-
   try {
-    const existingHotel = await Hotel.findById(req.params.id)
-
-    if (!existingHotel) {
-      return res.status(404).json({ message: 'Hotel not found' })
-    }
-
-    if (existingHotel.createdBy !== req.userId) {
-      return res.status(403).json({ message: 'Forbidden: you cannot delete this hotel' })
-    }
-
     const deletedHotel = await Hotel.findByIdAndDelete(req.params.id)
 
     if (!deletedHotel) {
       return res.status(404).json({ message: 'Hotel not found' })
     }
-
-    await Package.updateMany(
-      { hotels: deletedHotel._id },
-      { $pull: { hotels: deletedHotel._id } }
-    )
 
     return res.status(200).json({ message: 'Hotel deleted successfully' })
   } catch (error) {
