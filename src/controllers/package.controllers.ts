@@ -19,20 +19,6 @@ const packagePopulateConfig: PopulateOptions[] = [
   { path: 'vehicles', select: 'car carNumber driverName driverPhoneNumber vehicleType budget' },
 ]
 
-const isAdminUser = async (userId?: string): Promise<boolean> => {
-  if (!userId) {
-    return false
-  }
-
-  const roleCheck = await checkAdminRole(userId)
-
-  if (!roleCheck.ok && roleCheck.status === 500) {
-    logger.error(`Admin role check failed for user ${userId}: ${roleCheck.message}`)
-  }
-
-  return roleCheck.ok
-}
-
 const getPackages = async (req: Request, res: Response) => {
   try {
     const packages = await Package.find({ approved: true }).populate(packagePopulateConfig)
@@ -54,7 +40,14 @@ const viewPackage = async (req: Request, res: Response) => {
       return res.status(404).json({ message: 'Package not found' })
     }
 
-    const isAdmin = await isAdminUser(req.userId)
+    let isAdmin = false
+    if (req.userId) {
+      const roleCheck = await checkAdminRole(req.userId)
+      if (!roleCheck.ok && roleCheck.status === 500) {
+        logger.error(`Admin role check failed for user ${req.userId}: ${roleCheck.message}`)
+      }
+      isAdmin = roleCheck.ok
+    }
     const canViewPackage = packageData.approved || packageData.createdBy === req.userId || isAdmin
 
     if (!canViewPackage) {
@@ -230,7 +223,12 @@ const updatePackage = async (req: Request, res: Response) => {
       return res.status(404).json({ message: 'Package not found' })
     }
 
-    const isAdmin = await isAdminUser(req.userId)
+    const roleCheck = await checkAdminRole(req.userId)
+    const isAdmin = roleCheck.ok
+
+    if (!isAdmin && roleCheck.status === 500) {
+      logger.error(`Admin role check failed for user ${req.userId}: ${roleCheck.message}`)
+    }
     const isOwner = existingPackage.createdBy === req.userId
 
     if (!isOwner && !isAdmin) {
@@ -322,7 +320,12 @@ const deletePackage = async (req: Request, res: Response) => {
       return res.status(404).json({ message: 'Package not found' })
     }
 
-    const isAdmin = await isAdminUser(req.userId)
+    const roleCheck = await checkAdminRole(req.userId)
+    const isAdmin = roleCheck.ok
+
+    if (!isAdmin && roleCheck.status === 500) {
+      logger.error(`Admin role check failed for user ${req.userId}: ${roleCheck.message}`)
+    }
     const isOwner = existingPackage.createdBy === req.userId
 
     if (!isOwner && !isAdmin) {
@@ -357,10 +360,10 @@ const getPendingPackages = async (req: Request, res: Response) => {
   }
 
   try {
-    const isAdmin = await isAdminUser(req.userId)
+    const roleCheck = await checkAdminRole(req.userId)
 
-    if (!isAdmin) {
-      return res.status(403).json({ message: 'Forbidden: admin access required' })
+    if (!roleCheck.ok) {
+      return res.status(roleCheck.status).json({ message: roleCheck.message })
     }
 
     const packages = await Package.find({ approved: false })

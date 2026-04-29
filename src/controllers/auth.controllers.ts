@@ -13,16 +13,12 @@ const sanitizeUser = (user: { [key: string]: unknown }) => {
 	return safeUser
 }
 
-const getIsAdmin = async (userId: string): Promise<boolean> => {
-	const roleCheck = await checkAdminRole(userId)
-	return roleCheck.ok
-}
-
 const logAdminLogin = async (
 	user: { _id: { toString: () => string }; email: string; firebaseId: string },
 	source: 'email-password' | 'firebase-sync',
 ) => {
-	const isAdmin = await getIsAdmin(user._id.toString())
+	const roleCheck = await checkAdminRole(user._id.toString())
+	const isAdmin = roleCheck.ok
 
 	if (!isAdmin) {
 		return false
@@ -209,7 +205,8 @@ const getCurrentUser = async (req: AuthenticatedRequest, res: Response) => {
 		}
 
 		const safeUser = sanitizeUser(user.toObject())
-		const isAdmin = await getIsAdmin(user._id.toString())
+		const roleCheck = await checkAdminRole(user._id.toString())
+		const isAdmin = roleCheck.ok
 
 		return res.status(200).json({
 			user: {

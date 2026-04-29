@@ -11,6 +11,7 @@ import {
   deletePackage,
   approvePackage,
   unapprovePackage,
+  revealPackage,
 } from '../controllers/package.controllers'
 
 const router: Router = Router();
