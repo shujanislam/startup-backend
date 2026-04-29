@@ -1,4 +1,4 @@
-import type { Request, Response } from 'express'
+  import type { Request, Response } from 'express'
 import Hotel from '../models/Hotel'
 import Package from '../models/Package'
 import logger from '../config/logger'
