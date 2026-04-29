@@ -5,13 +5,32 @@ import { Request, Response } from 'express';
 import logger from '../config/logger'
 
 import User from '../models/User'
+import { checkAdminRole } from '../utils/roleCheck'
 
 const getProfiles = async (req: Request, res: Response) => {
   logger.info('getProfiles endpoint called')
-  
-  const profiles = await User.find({})
 
-  res.status(200).json(profiles)
+  if (!req.userId) {
+    return res.status(401).json({ message: 'Unauthorized' })
+  }
+
+  const roleCheck = await checkAdminRole(req.userId)
+
+  if (!roleCheck.ok) {
+    if (roleCheck.status === 500) {
+      logger.error(`Admin role check failed for user ${req.userId}: ${roleCheck.message}`)
+    }
+    return res.status(roleCheck.status).json({ message: roleCheck.message })
+  }
+
+  try {
+    const profiles = await User.find({})
+
+    return res.status(200).json(profiles)
+  } catch (error) {
+    logger.error(`Error fetching profiles: ${error}`)
+    return res.status(500).json({ message: 'Failed to fetch profiles' })
+  }
 }
 
 const showProfile = async (req: Request, res: Response) => {
