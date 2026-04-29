@@ -1,4 +1,4 @@
-import type { Request, Response } from 'express'
+  import type { Request, Response } from 'express'
 import Hotel from '../models/Hotel'
 import logger from '../config/logger'
 import { createHotelSchema, updateHotelSchema, validateSchema } from '../utils/validSchema'

@@ -33,4 +33,6 @@ router.delete('/delete-package/:id', deletePackage);
 router.patch('/approve-package/:id', approvePackage);
 router.patch('/unapprove-package/:id', unapprovePackage);
 
+router.patch('/reveal-package/:id', revealPackage);
+
 export default router
