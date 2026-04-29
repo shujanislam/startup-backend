@@ -19,18 +19,53 @@ const packagePopulateConfig: PopulateOptions[] = [
   { path: 'vehicles', select: 'car carNumber driverName driverPhoneNumber vehicleType budget' },
 ]
 
-const getPackages = async (req: Request, res: Response) => {
-  const packages = await Package.find({}).populate(packagePopulateConfig)
+const isAdminUser = async (userId?: string): Promise<boolean> => {
+  if (!userId) {
+    return false
+  }
 
-  res.status(200).json(packages)
+  const roleCheck = await checkAdminRole(userId)
+
+  if (!roleCheck.ok && roleCheck.status === 500) {
+    logger.error(`Admin role check failed for user ${userId}: ${roleCheck.message}`)
+  }
+
+  return roleCheck.ok
+}
+
+const getPackages = async (req: Request, res: Response) => {
+  try {
+    const packages = await Package.find({ approved: true }).populate(packagePopulateConfig)
+
+    return res.status(200).json(packages)
+  } catch (error) {
+    logger.error(`Error fetching package list: ${error}`)
+    return res.status(500).json({ message: 'Failed to fetch packages' })
+  }
 }
 
 const viewPackage = async (req: Request, res: Response) => { 
   const packageId = req.params.id 
 
-  const packageData = await Package.findById(packageId).populate(packagePopulateConfig)
+  try {
+    const packageData = await Package.findById(packageId).populate(packagePopulateConfig)
 
-  res.status(200).json(packageData)
+    if (!packageData) {
+      return res.status(404).json({ message: 'Package not found' })
+    }
+
+    const isAdmin = await isAdminUser(req.userId)
+    const canViewPackage = packageData.approved || packageData.createdBy === req.userId || isAdmin
+
+    if (!canViewPackage) {
+      return res.status(404).json({ message: 'Package not found' })
+    }
+
+    return res.status(200).json(packageData)
+  } catch (error) {
+    logger.error(`Error fetching package ${packageId}: ${error}`)
+    return res.status(500).json({ message: 'Failed to fetch package' })
+  }
 }
 
 const discoverPackage = async (req: Request, res: Response) => {
@@ -61,7 +96,9 @@ const discoverPackage = async (req: Request, res: Response) => {
   } = validation.data
 
   try {
-    const query: Record<string, unknown> = {}
+    const query: Record<string, unknown> = {
+      approved: true,
+    }
 
     if (search) {
       query.$or = [
@@ -193,13 +230,16 @@ const updatePackage = async (req: Request, res: Response) => {
       return res.status(404).json({ message: 'Package not found' })
     }
 
-    if (existingPackage.createdBy !== req.userId) {
+    const isAdmin = await isAdminUser(req.userId)
+    const isOwner = existingPackage.createdBy === req.userId
+
+    if (!isOwner && !isAdmin) {
       return res.status(403).json({ message: 'Forbidden: you cannot update this package' })
     }
 
     const updateData = {
       ...validation.data,
-      createdBy: req.userId,
+      ...(!isAdmin && existingPackage.approved ? { approved: false } : {}),
     }
 
     const updatedPackage = await Package.findByIdAndUpdate(
@@ -213,7 +253,10 @@ const updatePackage = async (req: Request, res: Response) => {
     }
 
     return res.status(200).json({
-      message: 'Package updated successfully',
+      message:
+        !isAdmin && existingPackage.approved
+          ? 'Package updated successfully and requires re-approval'
+          : 'Package updated successfully',
       data: updatedPackage,
     })
   } catch (error) {
@@ -272,26 +315,63 @@ const deletePackage = async (req: Request, res: Response) => {
   
   const packageId = req.params.id
 
-  const existingPackage = await Package.findById(packageId)
-  
-  if (!existingPackage) {
-    return res.status(404).json({ message: 'Package not found' })
-  }
+  try {
+    const existingPackage = await Package.findById(packageId)
+    
+    if (!existingPackage) {
+      return res.status(404).json({ message: 'Package not found' })
+    }
 
-  if (existingPackage.createdBy !== req.userId) {
-    return res.status(403).json({ message: 'Forbidden: you cannot delete this package' })
-  }
+    const isAdmin = await isAdminUser(req.userId)
+    const isOwner = existingPackage.createdBy === req.userId
 
-  const deletedPackage = await Package.findByIdAndDelete(packageId)
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({ message: 'Forbidden: you cannot delete this package' })
+    }
 
-  if(!deletedPackage){
-    logger.info('Error while deleting the package')
-  }
-  else{
+    if (existingPackage.approved && !isAdmin) {
+      return res
+        .status(403)
+        .json({ message: 'Approved packages can only be deleted by an admin' })
+    }
+
+    const deletedPackage = await Package.findByIdAndDelete(packageId)
+
+    if (!deletedPackage) {
+      logger.info('Error while deleting the package')
+      return res.status(404).json({ message: 'Package not found' })
+    }
+
     logger.info('Successfully deleted the package')
+
+    return res.status(200).json({ message: 'Package deleted successfully' })
+  } catch (error) {
+    logger.error(`Error deleting package: ${error}`)
+    return res.status(500).json({ message: 'Failed to delete package' })
+  }
+}
+
+const getPendingPackages = async (req: Request, res: Response) => {
+  if (!req.userId) {
+    return res.status(401).json({ message: 'Unauthorized' })
   }
 
-  res.status(200).json({ message: 'deletePackage working' })
+  try {
+    const isAdmin = await isAdminUser(req.userId)
+
+    if (!isAdmin) {
+      return res.status(403).json({ message: 'Forbidden: admin access required' })
+    }
+
+    const packages = await Package.find({ approved: false })
+      .populate(packagePopulateConfig)
+      .sort({ createdAt: -1 })
+
+    return res.status(200).json(packages)
+  } catch (error) {
+    logger.error(`Error fetching pending packages: ${error}`)
+    return res.status(500).json({ message: 'Failed to fetch pending packages' })
+  }
 }
 
 const approvePackage = async(req: Request, res: Response) => {
@@ -323,6 +403,38 @@ const approvePackage = async(req: Request, res: Response) => {
   } catch (error) {
     logger.error(`Error approving package: ${error}`)
     return res.status(500).json({ message: 'Failed to approve package' })
+  }
+}
+
+const unapprovePackage = async(req: Request, res: Response) => {
+  if (!req.userId) {
+    return res.status(401).json({ message: 'Unauthorized' })
+  }
+
+  try {
+    const roleCheck = await checkAdminRole(req.userId)
+
+    if (!roleCheck.ok) {
+      return res.status(roleCheck.status).json({ message: roleCheck.message })
+    }
+
+    const unapprovedPackage = await Package.findByIdAndUpdate(
+      req.params.id,
+      { approved: false },
+      { new: true, runValidators: true }
+    )
+
+    if (!unapprovedPackage) {
+      return res.status(404).json({ message: 'Package not found' })
+    }
+
+    return res.status(200).json({
+      message: 'Package moved back to pending approval successfully',
+      data: unapprovedPackage,
+    })
+  } catch (error) {
+    logger.error(`Error unapproving package: ${error}`)
+    return res.status(500).json({ message: 'Failed to unapprove package' })
   }
 }
 
@@ -362,4 +474,16 @@ const revealPackage = async(req: Request, res: Response) => {
   }
 } 
 
-export { getPackages, viewPackage, discoverPackage, postPackage, updatePackage, postPackageReview, deletePackage, approvePackage, revealPackage }
+export {
+  getPackages,
+  viewPackage,
+  discoverPackage,
+  getPendingPackages,
+  postPackage,
+  updatePackage,
+  postPackageReview,
+  deletePackage,
+  approvePackage,
+  unapprovePackage,
+  revealPackage,
+}

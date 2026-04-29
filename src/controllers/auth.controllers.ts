@@ -6,10 +6,30 @@ import logger from '../config/logger'
 import User from '../models/User'
 import type { AuthenticatedRequest } from '../types/auth'
 import { createUserSchema, validateSchema } from '../utils/validSchema'
+import { checkAdminRole } from '../utils/roleCheck'
 
 const sanitizeUser = (user: { [key: string]: unknown }) => {
 	const { password: _password, ...safeUser } = user
 	return safeUser
+}
+
+const getIsAdmin = async (userId: string): Promise<boolean> => {
+	const roleCheck = await checkAdminRole(userId)
+	return roleCheck.ok
+}
+
+const logAdminLogin = async (
+	user: { _id: { toString: () => string }; email: string; firebaseId: string },
+	source: 'email-password' | 'firebase-sync',
+) => {
+	const isAdmin = await getIsAdmin(user._id.toString())
+
+	if (!isAdmin) {
+		return false
+	}
+
+	logger.info(`Admin logged in via ${source}: email=${user.email}, firebaseId=${user.firebaseId}`)
+	return true
 }
 
 const registerUser = async (req: Request, res: Response) => {
@@ -148,6 +168,8 @@ const loginUser = async (req: AuthenticatedRequest, res: Response) => {
 			return res.status(401).json({ message: 'Invalid password' })
 		}
 
+		await logAdminLogin(user, 'email-password')
+
 		return res.status(200).json({
 			message: 'User authenticated successfully',
 			user: sanitizeUser(user.toObject()),
@@ -187,12 +209,14 @@ const getCurrentUser = async (req: AuthenticatedRequest, res: Response) => {
 		}
 
 		const safeUser = sanitizeUser(user.toObject())
+		const isAdmin = await getIsAdmin(user._id.toString())
 
 		return res.status(200).json({
 			user: {
 				...safeUser,
 				uid: user.firebaseId,
 				email: user.email,
+				isAdmin,
 			},
 		})
 	} catch (error) {
@@ -213,6 +237,7 @@ const syncFirebaseUser = async (req: AuthenticatedRequest, res: Response) => {
 		const existingUser = await User.findOne({ firebaseId: req.user.uid })
 
 		if (existingUser) {
+			await logAdminLogin(existingUser, 'firebase-sync')
 			const safeUser = sanitizeUser(existingUser.toObject())
 
 			return res.status(200).json({
@@ -247,6 +272,7 @@ const syncFirebaseUser = async (req: AuthenticatedRequest, res: Response) => {
 		})
 
 		const safeUser = sanitizeUser(createdUser.toObject())
+		await logAdminLogin(createdUser, 'firebase-sync')
 
 		return res.status(201).json({
 			message: 'User synced successfully',
