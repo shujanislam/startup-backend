@@ -17,6 +17,8 @@ const userPackageRevealSchema = new Schema<IUserPackageReveal>(
   }
 )
 
-const UserPacakgeReveal = models.UserPacakgeReveal || model<IUserPackageReveal>('UserPacakgeReveal', userPackageRevealSchema)
+userPackageRevealSchema.index({ packageId: 1, userId: 1 }, { unique: true })
 
-export default UserPacakgeReveal;
+const UserPackageReveal = models.UserPackageReveal || model<IUserPackageReveal>('UserPackageReveal', userPackageRevealSchema)
+
+export default UserPackageReveal;

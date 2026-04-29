@@ -5,6 +5,9 @@ import logger from '../config/logger'
 import Package from '../models/Package' 
 
 import PackageReview from '../models/PackageReviews' 
+
+import UserPackageReveal from '../models/UserPackageReveal'
+
 import type { PopulateOptions } from 'mongoose'
 
 import { createPackageSchema, validateSchema, updatePackageSchema, createReviewSchema, sortPackageSchema } from '../utils/validSchema'
@@ -323,4 +326,40 @@ const approvePackage = async(req: Request, res: Response) => {
   }
 }
 
-export { getPackages, viewPackage, discoverPackage, postPackage, updatePackage, postPackageReview, deletePackage, approvePackage }
+const revealPackage = async(req: Request, res: Response) => {
+  if(!req.userId) return res.status(401).json({ message: 'Unauthorized' })
+
+  try{
+    const packageId = req.params.id
+
+    if (!packageId) {
+      return res.status(400).json({ message: 'Package id is required' })
+    }
+
+    const existingPackage = await Package.findById(packageId)
+
+    if(!existingPackage) return res.status(404).json({ message: 'Package not found' })
+
+    const alreadyRevealed = await UserPackageReveal.findOne({
+      packageId,
+      userId: req.userId,
+    })
+
+    if (alreadyRevealed) {
+      return res.status(200).json({ message: 'Package already revealed', data: existingPackage })
+    }
+
+    await UserPackageReveal.create({
+      packageId,
+      userId: req.userId,
+    })
+
+    return res.status(200).json({ message: 'Package revealed successfully', data: existingPackage })
+  }
+  catch(err: any){
+    logger.error(err.message)
+    return res.status(500).json({ message: 'Failed to reveal package' })
+  }
+} 
+
+export { getPackages, viewPackage, discoverPackage, postPackage, updatePackage, postPackageReview, deletePackage, approvePackage, revealPackage }

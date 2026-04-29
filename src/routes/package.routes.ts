@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 
-import { getPackages, viewPackage, discoverPackage, postPackage, updatePackage, postPackageReview, deletePackage, approvePackage } from '../controllers/package.controllers'
+import { getPackages, viewPackage, discoverPackage, postPackage, updatePackage, postPackageReview, deletePackage, approvePackage, revealPackage } from '../controllers/package.controllers'
 
 const router: Router = Router();
 
@@ -19,5 +19,7 @@ router.post('/post-package-review', postPackageReview);
 router.delete('/delete-package/:id', deletePackage);
 
 router.patch('/approve-package/:id', approvePackage);
+
+router.patch('/reveal-package/:id', revealPackage);
 
 export default router
