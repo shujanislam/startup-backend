@@ -1,6 +1,6 @@
-import { updateUserSchema, validateSchema } from '../utils/validSchema'
+import { updateUserSchema, validateSchema } from '../utils/validSchema';
 
-import { Request, Response } from 'express'
+import { Request, Response } from 'express';
 
 import logger from '../config/logger'
 
