@@ -1,9 +1,23 @@
-  import type { Request, Response } from 'express'
+import type { Request, Response } from 'express'
 import Hotel from '../models/Hotel'
 import logger from '../config/logger'
+import { checkAdminRole } from '../utils/roleCheck'
 import { createHotelSchema, updateHotelSchema, validateSchema } from '../utils/validSchema'
 
-const getHotels = async (_req: Request, res: Response) => {
+const getHotels = async (req: Request, res: Response) => {
+  if (!req.userId) {
+    return res.status(401).json({ message: 'Unauthorized' })
+  }
+
+  const roleCheck = await checkAdminRole(req.userId)
+
+  if (!roleCheck.ok) {
+    if (roleCheck.status === 500) {
+      logger.error(`Admin role check failed for user ${req.userId}: ${roleCheck.message}`)
+    }
+    return res.status(roleCheck.status).json({ message: roleCheck.message })
+  }
+
   try {
     const hotels = await Hotel.find({})
     return res.status(200).json(hotels)
