@@ -8,6 +8,8 @@ import {
   postPackage,
   updatePackage,
   postPackageReview,
+  getReviewEligibility,
+  getPackageReviews,
   deletePackage,
   approvePackage,
   unapprovePackage,
@@ -31,6 +33,10 @@ router.post('/post-package', postPackage);
 router.patch('/update-package/:id', updatePackage);
 
 router.post('/post-package-review', postPackageReview);
+
+router.get('/review-eligibility/:id', getReviewEligibility)
+
+router.get('/get-package-reviews/:id', getPackageReviews);
 
 router.delete('/delete-package/:id', deletePackage);
 

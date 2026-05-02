@@ -4,7 +4,9 @@ import logger from '../config/logger'
 
 import Package from '../models/Package' 
 
-import PackageReview from '../models/PackageReviews' 
+import PackageReview from '../models/PackageReviews'
+
+import User from '../models/User'
 
 import UserPackageReveal from '../models/UserPackageReveal'
 
@@ -20,6 +22,39 @@ const packagePopulateConfig: PopulateOptions[] = [
   { path: 'hotels', select: 'name phoneNumber address photos budget' },
   { path: 'vehicles', select: 'car carNumber driverName driverPhoneNumber vehicleType budget' },
 ]
+
+const REVIEW_DELAY_DAYS = 3
+const REVIEW_DELAY_MS = REVIEW_DELAY_DAYS * 24 * 60 * 60 * 1000
+
+const buildReviewEligibility = (revealRecord: { createdAt: Date } | null) => {
+  if (!revealRecord) {
+    return {
+      revealed: false,
+      revealedAt: null as Date | null,
+      canReview: false,
+      reviewAvailableAt: null as Date | null,
+      daysRemaining: null as number | null,
+      status: 'locked' as 'locked' | 'cooldown' | 'eligible',
+    }
+  }
+
+  const revealedAt = new Date(revealRecord.createdAt)
+  const reviewAvailableAt = new Date(revealedAt.getTime() + REVIEW_DELAY_MS)
+  const now = Date.now()
+  const canReview = now >= reviewAvailableAt.getTime()
+  const daysRemaining = canReview
+    ? 0
+    : Math.ceil((reviewAvailableAt.getTime() - now) / (24 * 60 * 60 * 1000))
+
+  return {
+    revealed: true,
+    revealedAt,
+    canReview,
+    reviewAvailableAt,
+    daysRemaining,
+    status: canReview ? 'eligible' : 'cooldown',
+  }
+}
 
 const getPackages = async (req: Request, res: Response) => {
   try {
@@ -289,6 +324,29 @@ const postPackageReview = async (req: Request, res: Response) => {
       return res.status(404).json({ message: 'Package not found' })
     }
 
+    const revealRecord = await UserPackageReveal.findOne({
+      packageId,
+      userId: req.userId,
+    })
+      .select('createdAt')
+      .lean()
+
+    const eligibility = buildReviewEligibility(revealRecord)
+
+    if (!eligibility.revealed) {
+      return res.status(403).json({ message: 'Unlock the trip before posting a review' })
+    }
+
+    if (!eligibility.canReview) {
+      return res.status(403).json({
+        message: `Reviews unlock ${REVIEW_DELAY_DAYS} days after unlocking`,
+        data: {
+          reviewAvailableAt: eligibility.reviewAvailableAt?.toISOString() ?? null,
+          daysRemaining: eligibility.daysRemaining,
+        },
+      })
+    }
+
     const createdReview = await PackageReview.create({
       packageId,
       userId: req.userId,
@@ -303,6 +361,95 @@ const postPackageReview = async (req: Request, res: Response) => {
   } catch (error) {
     logger.error(`Error creating package review: ${error}`)
     return res.status(500).json({ message: 'Failed to create package review' })
+  }
+}
+
+const getReviewEligibility = async (req: Request, res: Response) => {
+  if (!req.userId) {
+    return res.status(401).json({ message: 'Unauthorized' })
+  }
+
+  const packageId = req.params.id
+
+  if (!packageId) {
+    return res.status(400).json({ message: 'Package id is required' })
+  }
+
+  try {
+    const packageExists = await Package.exists({ _id: packageId })
+
+    if (!packageExists) {
+      return res.status(404).json({ message: 'Package not found' })
+    }
+
+    const revealRecord = await UserPackageReveal.findOne({
+      packageId,
+      userId: req.userId,
+    })
+      .select('createdAt')
+      .lean()
+
+    const eligibility = buildReviewEligibility(revealRecord)
+
+    return res.status(200).json({
+      message: 'Review eligibility fetched successfully',
+      data: {
+        revealed: eligibility.revealed,
+        revealedAt: eligibility.revealedAt ? eligibility.revealedAt.toISOString() : null,
+        canReview: eligibility.canReview,
+        reviewAvailableAt: eligibility.reviewAvailableAt
+          ? eligibility.reviewAvailableAt.toISOString()
+          : null,
+        daysRemaining: eligibility.daysRemaining,
+        status: eligibility.status,
+      },
+    })
+  } catch (error) {
+    logger.error(`Error fetching review eligibility for package ${packageId}: ${error}`)
+    return res.status(500).json({ message: 'Failed to fetch review eligibility' })
+  }
+}
+
+const getPackageReviews = async (req: Request, res: Response) => {
+  const packageId = req.params.id
+
+  if (!packageId) {
+    return res.status(400).json({ message: 'Package id is required' })
+  }
+
+  try {
+    const packageExists = await Package.exists({ _id: packageId })
+    if (!packageExists) {
+      return res.status(404).json({ message: 'Package not found' })
+    }
+
+    const reviews = await PackageReview.find({ packageId })
+      .sort({ createdAt: -1 })
+      .lean()
+
+    const userIds = [...new Set(reviews.map((r) => r.userId).filter(Boolean))]
+    const users = await User.find({ firebaseId: { $in: userIds } })
+      .select('firebaseId name profilePicture')
+      .lean()
+
+    const userMap = new Map(users.map((u) => [u.firebaseId, u]))
+
+    const enrichedReviews = reviews.map((r) => {
+      const reviewer = userMap.get(r.userId)
+      return {
+        ...r,
+        userName: reviewer?.name ?? 'Anonymous',
+        userPicture: reviewer?.profilePicture ?? '',
+      }
+    })
+
+    return res.status(200).json({
+      message: 'Reviews fetched successfully',
+      data: enrichedReviews,
+    })
+  } catch (error) {
+    logger.error(`Error fetching reviews for package ${packageId}: ${error}`)
+    return res.status(500).json({ message: 'Failed to fetch reviews' })
   }
 }
 
@@ -569,6 +716,8 @@ export {
   postPackage,
   updatePackage,
   postPackageReview,
+  getReviewEligibility,
+  getPackageReviews,
   deletePackage,
   approvePackage,
   unapprovePackage,
