@@ -511,10 +511,55 @@ const likePackage = async(req: Request, res: Response) => {
   }
   catch(err: any){
     logger.error(err.message)
-    return res.status(500).json({ message: 'Failed to reveal package' })
+    return res.status(500).json({ message: 'Failed to like package' })
   }
 } 
 
+const getLikedPackages = async(req: Request, res: Response) => {
+  if (!req.userId) {
+    return res.status(401).json({ message: 'Unauthorized' })
+  }
+
+  try {
+    const likedRecords = await LikedPackage.find({ userId: req.userId }).lean()
+
+    if (likedRecords.length === 0) {
+      return res.status(200).json({
+        message: 'No liked packages found',
+        data: [],
+      })
+    }
+
+    const packageIds = [
+      ...new Set(
+        likedRecords
+          .map((record) => record.packageId)
+          .filter((id): id is string => Boolean(id && id.trim()))
+      ),
+    ]
+
+    if (packageIds.length === 0) {
+      return res.status(200).json({
+        message: 'No valid liked package ids found',
+        data: [],
+      })
+    }
+
+    const likedPackages = await Package.find({ _id: { $in: packageIds } })
+      .populate(packagePopulateConfig)
+      .sort({ updatedAt: -1 })
+
+    return res.status(200).json({
+      message: 'Liked packages fetched successfully',
+      data: likedPackages
+    })
+
+  } catch (error) {
+    logger.error(`Error fetching liked packages: ${error}`)
+
+    return res.status(500).json({ message: 'Failed to get liked packages' })
+  }
+}
 
 export {
   getPackages,
@@ -528,5 +573,6 @@ export {
   approvePackage,
   unapprovePackage,
   revealPackage,
+  getLikedPackages,
   likePackage,
 }

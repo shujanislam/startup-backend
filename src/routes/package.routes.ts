@@ -12,6 +12,7 @@ import {
   approvePackage,
   unapprovePackage,
   revealPackage,
+  getLikedPackages,
   likePackage,
 } from '../controllers/package.controllers'
 
@@ -38,6 +39,8 @@ router.patch('/approve-package/:id', approvePackage);
 router.patch('/unapprove-package/:id', unapprovePackage);
 
 router.patch('/reveal-package/:id', revealPackage);
+
+router.get('/get-liked-packages', getLikedPackages);
 
 router.post('/like-package/:id', likePackage);
 
