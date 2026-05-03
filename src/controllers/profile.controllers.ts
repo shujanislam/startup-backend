@@ -166,4 +166,33 @@ const getRevealedPackages = async (req: Request, res: Response) => {
   }
 }
 
-export { getProfiles, showProfile, updateProfile, deleteProfile, getRevealedPackages }
+const getCreatedPackages = async(req: Request, res: Response) => {
+  if(!req.userId) return res.status(401).json({ message: 'Unauthorized' })
+
+  try{
+    const userId = req.userId
+
+    const userExists = await User.findById(userId)
+
+    if(!userExists) return res.status(404).json({ message: 'User not found' })
+
+    const createdPackages = await Package.find({ createdBy: userId })
+
+    if(!createdPackages) return res.status(404).json({ message: 'No packages created found' })
+
+    return res.status(200).json({ createdPackages })
+  }
+  catch(err: any){
+    logger.error(err.message)
+    return res.status(500).json({ message: 'Failed to fetch created packages' })
+  }
+}
+
+export {
+  getProfiles,
+  showProfile,
+  updateProfile,
+  deleteProfile,
+  getRevealedPackages,
+  getCreatedPackages,
+}
