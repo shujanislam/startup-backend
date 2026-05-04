@@ -8,6 +8,12 @@ export interface IUser extends Document {
   profilePicture?: string;
   bio?: string;
   gender: string;
+  phone?: string;
+  location?: string;
+  dateOfBirth?: string;
+  occupation?: string;
+  languages?: string[];
+  travelStyle?: string;
   onboardingComplete?: boolean;
   tags?: string[];
   createdAt: Date;
@@ -22,7 +28,13 @@ const userSchema = new Schema<IUser>(
     password: { type: String, required: true },
     gender: { type: String, required: true },
     profilePicture: { type: String, default: '' },
-    bio: { type: String, trim: true},
+    bio: { type: String, trim: true },
+    phone: { type: String, trim: true },
+    location: { type: String, trim: true },
+    dateOfBirth: { type: String, trim: true },
+    occupation: { type: String, trim: true },
+    languages: { type: [String], default: [] },
+    travelStyle: { type: String, trim: true },
     onboardingComplete: { type: Boolean, required: false },
     tags: { type: [String], default: [] }
   },

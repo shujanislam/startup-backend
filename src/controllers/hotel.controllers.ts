@@ -43,6 +43,10 @@ const viewHotel = async (req: Request, res: Response) => {
 }
 
 const postHotel = async (req: Request, res: Response) => {
+  if (!req.userId) {
+    return res.status(401).json({ message: 'Unauthorized' })
+  }
+
   const validation = validateSchema(createHotelSchema, req.body)
 
   if (!validation.success) {
@@ -53,7 +57,10 @@ const postHotel = async (req: Request, res: Response) => {
   }
 
   try {
-    const createdHotel = await Hotel.create(validation.data)
+    const createdHotel = await Hotel.create({
+      ...validation.data,
+      createdBy: req.userId,
+    })
     return res.status(201).json({
       message: 'Hotel created successfully',
       data: createdHotel,

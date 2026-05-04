@@ -29,6 +29,10 @@ const viewVehicle = async (req: Request, res: Response) => {
 }
 
 const postVehicle = async (req: Request, res: Response) => {
+  if (!req.userId) {
+    return res.status(401).json({ message: 'Unauthorized' })
+  }
+
   const validation = validateSchema(createVehicleSchema, req.body)
 
   if (!validation.success) {
@@ -39,7 +43,10 @@ const postVehicle = async (req: Request, res: Response) => {
   }
 
   try {
-    const createdVehicle = await Vehicle.create(validation.data)
+    const createdVehicle = await Vehicle.create({
+      ...validation.data,
+      createdBy: req.userId,
+    })
     return res.status(201).json({
       message: 'Vehicle created successfully',
       data: createdVehicle,

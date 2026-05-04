@@ -27,6 +27,14 @@ export const updateUserSchema = z.object({
     gender: z.string().optional(),
     profilePicture: z.string().optional(),
     bio: z.string().optional(),
+    phone: z.string().optional(),
+    location: z.string().optional(),
+    dateOfBirth: z.string().optional(),
+    occupation: z.string().optional(),
+    languages: z.array(z.string()).optional(),
+    travelStyle: z.string().optional(),
+    tags: z.array(z.string()).optional(),
+    onboardingComplete: z.boolean().optional(),
 })
 
 // Package schemas
