@@ -1,11 +1,27 @@
 import type { Request, Response } from 'express'
 import Vehicle from '../models/Vehicle'
+import redis from '../config/redis'
 import logger from '../config/logger'
 import { createVehicleSchema, updateVehicleSchema, validateSchema } from '../utils/validSchema'
 
+const REDIS_TTL = 3600
+
 const getVehicles = async (_req: Request, res: Response) => {
   try {
+    const REDIS_CACHE_KEY = 'vehicles:list'
+
+    const cached = await redis.get(REDIS_CACHE_KEY)
+
+    if (cached) {
+      logger.info('cache hit')
+      return res.status(200).json(JSON.parse(cached))
+    }
+
     const vehicles = await Vehicle.find({})
+
+    await redis.set(REDIS_CACHE_KEY, JSON.stringify(vehicles), 'EX', REDIS_TTL)
+
+    logger.info('cache miss')
     return res.status(200).json(vehicles)
   } catch (error) {
     logger.error(`Error fetching vehicles: ${error}`)
@@ -15,11 +31,24 @@ const getVehicles = async (_req: Request, res: Response) => {
 
 const viewVehicle = async (req: Request, res: Response) => {
   try {
+    const REDIS_CACHE_KEY = `vehicle:${req.params.id}`
+
+    const cached = await redis.get(REDIS_CACHE_KEY)
+
+    if (cached) {
+      logger.info('cache hit')
+      return res.status(200).json(JSON.parse(cached))
+    }
+
     const vehicle = await Vehicle.findById(req.params.id)
 
     if (!vehicle) {
       return res.status(404).json({ message: 'Vehicle not found' })
     }
+
+    await redis.set(REDIS_CACHE_KEY, JSON.stringify(vehicle), 'EX', REDIS_TTL)
+
+    logger.info('cache miss')
 
     return res.status(200).json(vehicle)
   } catch (error) {

@@ -2,6 +2,8 @@ import { updateUserSchema, validateSchema } from '../utils/validSchema';
 
 import { Request, Response } from 'express';
 
+import redis from '../config/redis'
+
 import logger from '../config/logger'
 
 import User from '../models/User'
@@ -10,6 +12,8 @@ import { checkAdminRole } from '../utils/roleCheck'
 import UserPackageReveal from '../models/UserPackageReveal'
 
 import Package from '../models/Package'
+
+const REDIS_TTL = 3600
 
 const getProfiles = async (req: Request, res: Response) => {
   logger.info('getProfiles endpoint called')
@@ -28,7 +32,20 @@ const getProfiles = async (req: Request, res: Response) => {
   }
 
   try {
+    const REDIS_CACHE_KEY = 'profiles:list'
+
+    const cached = await redis.get(REDIS_CACHE_KEY)
+
+    if (cached) {
+      logger.info('cache hit')
+      return res.status(200).json(JSON.parse(cached))
+    }
+
     const profiles = await User.find({})
+
+    await redis.set(REDIS_CACHE_KEY, JSON.stringify(profiles), 'EX', REDIS_TTL)
+
+    logger.info('cache miss')
 
     return res.status(200).json(profiles)
   } catch (error) {
@@ -38,13 +55,32 @@ const getProfiles = async (req: Request, res: Response) => {
 }
 
 const showProfile = async (req: Request, res: Response) => {
-  logger.info(`showProfile endpoint called for id: ${req.params.id}`)
+  const REDIS_CACHE_KEY = `profile:${req.params.id}`
 
-  const profileId = req.params.id
+  try {
+    const cached = await redis.get(REDIS_CACHE_KEY)
 
-  const profile = await User.findById(profileId)
- 
-  res.status(200).json(profile)
+    if (cached) {
+      logger.info('cache hit')
+      return res.status(200).json(JSON.parse(cached))
+    }
+
+    const profileId = req.params.id
+
+    const profile = await User.findById(profileId)
+
+    if (!profile) {
+      return res.status(404).json({ message: 'Profile not found' })
+    }
+
+    await redis.set(REDIS_CACHE_KEY, JSON.stringify(profile), 'EX', REDIS_TTL)
+
+    logger.info('cache miss')
+    return res.status(200).json(profile)
+  } catch (error) {
+    logger.error(`Error fetching profile ${req.params.id}: ${error}`)
+    return res.status(500).json({ message: 'Failed to fetch profile' })
+  }
 }
 
 const updateProfile = async (req: Request, res: Response) => {
@@ -172,15 +208,27 @@ const getCreatedPackages = async(req: Request, res: Response) => {
   try{
     const userId = req.userId
 
+    const REDIS_CACHE_KEY = `packages:created:${userId}`
+
+    const cached = await redis.get(REDIS_CACHE_KEY)
+
+    if (cached) {
+      logger.info('cache hit')
+      return res.status(200).json(JSON.parse(cached))
+    }
+
     const userExists = await User.findById(userId)
 
     if(!userExists) return res.status(404).json({ message: 'User not found' })
 
     const createdPackages = await Package.find({ createdBy: userId })
 
-    if(!createdPackages) return res.status(404).json({ message: 'No packages created found' })
+    const response = { createdPackages }
 
-    return res.status(200).json({ createdPackages })
+    await redis.set(REDIS_CACHE_KEY, JSON.stringify(response), 'EX', REDIS_TTL)
+
+    logger.info('cache miss')
+    return res.status(200).json(response)
   }
   catch(err: any){
     logger.error(err.message)

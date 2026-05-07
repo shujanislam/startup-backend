@@ -1,8 +1,11 @@
 import type { Request, Response } from 'express'
 import Hotel from '../models/Hotel'
+import redis from '../config/redis'
 import logger from '../config/logger'
 import { checkAdminRole } from '../utils/roleCheck'
 import { createHotelSchema, updateHotelSchema, validateSchema } from '../utils/validSchema'
+
+const REDIS_TTL = 3600
 
 const getHotels = async (req: Request, res: Response) => {
   if (!req.userId) {
@@ -19,7 +22,20 @@ const getHotels = async (req: Request, res: Response) => {
   }
 
   try {
+    const REDIS_CACHE_KEY = 'hotels:list'
+
+    const cached = await redis.get(REDIS_CACHE_KEY)
+
+    if (cached) {
+      logger.info('cache hit')
+      return res.status(200).json(JSON.parse(cached))
+    }
+
     const hotels = await Hotel.find({})
+
+    await redis.set(REDIS_CACHE_KEY, JSON.stringify(hotels), 'EX', REDIS_TTL)
+
+    logger.info('cache miss')
     return res.status(200).json(hotels)
   } catch (error) {
     logger.error(`Error fetching hotels: ${error}`)
@@ -29,11 +45,24 @@ const getHotels = async (req: Request, res: Response) => {
 
 const viewHotel = async (req: Request, res: Response) => {
   try {
+    const REDIS_CACHE_KEY = `hotel:${req.params.id}`
+
+    const cached = await redis.get(REDIS_CACHE_KEY)
+
+    if (cached) {
+      logger.info('cache hit')
+      return res.status(200).json(JSON.parse(cached))
+    }
+
     const hotel = await Hotel.findById(req.params.id)
 
     if (!hotel) {
       return res.status(404).json({ message: 'Hotel not found' })
     }
+
+    await redis.set(REDIS_CACHE_KEY, JSON.stringify(hotel), 'EX', REDIS_TTL)
+
+    logger.info('cache miss')
 
     return res.status(200).json(hotel)
   } catch (error) {

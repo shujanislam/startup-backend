@@ -1,5 +1,7 @@
 import { Request, Response } from 'express'
 
+import redis from '../config/redis'
+
 import logger from '../config/logger'
 
 import Package from '../models/Package' 
@@ -18,6 +20,8 @@ import { createPackageSchema, validateSchema, updatePackageSchema, createReviewS
 
 import { checkAdminRole } from '../utils/roleCheck'
 
+import { buildReviewEligibility } from '../utils/reviewEligibility'
+
 const packagePopulateConfig: PopulateOptions[] = [
   { path: 'hotels', select: 'name phoneNumber address photos budget' },
   { path: 'vehicles', select: 'car carNumber driverName driverPhoneNumber vehicleType budget' },
@@ -26,40 +30,23 @@ const packagePopulateConfig: PopulateOptions[] = [
 const REVIEW_DELAY_DAYS = 3
 const REVIEW_DELAY_MS = REVIEW_DELAY_DAYS * 24 * 60 * 60 * 1000
 
-const buildReviewEligibility = (revealRecord: { createdAt: Date } | null) => {
-  if (!revealRecord) {
-    return {
-      revealed: false,
-      revealedAt: null as Date | null,
-      canReview: false,
-      reviewAvailableAt: null as Date | null,
-      daysRemaining: null as number | null,
-      status: 'locked' as 'locked' | 'cooldown' | 'eligible',
-    }
-  }
-
-  const revealedAt = new Date(revealRecord.createdAt)
-  const reviewAvailableAt = new Date(revealedAt.getTime() + REVIEW_DELAY_MS)
-  const now = Date.now()
-  const canReview = now >= reviewAvailableAt.getTime()
-  const daysRemaining = canReview
-    ? 0
-    : Math.ceil((reviewAvailableAt.getTime() - now) / (24 * 60 * 60 * 1000))
-
-  return {
-    revealed: true,
-    revealedAt,
-    canReview,
-    reviewAvailableAt,
-    daysRemaining,
-    status: canReview ? 'eligible' : 'cooldown',
-  }
-}
+const REDIS_TTL = 3600
 
 const getPackages = async (req: Request, res: Response) => {
+  const REDIS_CACHE_KEY = 'packages:list:approved:true'
   try {
+    const cached = await redis.get(REDIS_CACHE_KEY)
+
+    if(cached) {
+      logger.info('cache hit')
+      return res.status(200).json(JSON.parse(cached))
+    }
+
     const packages = await Package.find({ approved: true }).populate(packagePopulateConfig)
 
+    await redis.set(REDIS_CACHE_KEY, JSON.stringify(packages), 'EX', REDIS_TTL)
+
+    logger.info('cache miss')
     return res.status(200).json(packages)
   } catch (error) {
     logger.error(`Error fetching package list: ${error}`)
@@ -71,6 +58,14 @@ const viewPackage = async (req: Request, res: Response) => {
   const packageId = req.params.id 
 
   try {
+    const REDIS_CACHE_KEY = `package:${packageId}`
+
+    const cached = await redis.get(REDIS_CACHE_KEY)
+
+    if(cached){
+      return res.status(200).json(JSON.parse(cached))
+    }
+
     const packageData = await Package.findById(packageId).populate(packagePopulateConfig)
 
     if (!packageData) {
@@ -90,6 +85,8 @@ const viewPackage = async (req: Request, res: Response) => {
     if (!canViewPackage) {
       return res.status(404).json({ message: 'Package not found' })
     }
+
+    await redis.set(REDIS_CACHE_KEY, JSON.stringify(packageData), 'EX', REDIS_TTL)
 
     return res.status(200).json(packageData)
   } catch (error) {
@@ -418,6 +415,15 @@ const getPackageReviews = async (req: Request, res: Response) => {
   }
 
   try {
+    const REDIS_CACHE_KEY = `package:${packageId}:reviews`
+
+    const cached = await redis.get(REDIS_CACHE_KEY)
+
+    if (cached) {
+      logger.info('cache hit')
+      return res.status(200).json(JSON.parse(cached))
+    }
+
     const packageExists = await Package.exists({ _id: packageId })
     if (!packageExists) {
       return res.status(404).json({ message: 'Package not found' })
@@ -443,10 +449,15 @@ const getPackageReviews = async (req: Request, res: Response) => {
       }
     })
 
-    return res.status(200).json({
+    const response = {
       message: 'Reviews fetched successfully',
       data: enrichedReviews,
-    })
+    }
+
+    await redis.set(REDIS_CACHE_KEY, JSON.stringify(response), 'EX', REDIS_TTL)
+
+    logger.info('cache miss')
+    return res.status(200).json(response)
   } catch (error) {
     logger.error(`Error fetching reviews for package ${packageId}: ${error}`)
     return res.status(500).json({ message: 'Failed to fetch reviews' })
@@ -668,13 +679,27 @@ const getLikedPackages = async(req: Request, res: Response) => {
   }
 
   try {
+    const REDIS_CACHE_KEY = `packages:liked:${req.userId}`
+
+    const cached = await redis.get(REDIS_CACHE_KEY)
+
+    if (cached) {
+      logger.info('cache hit')
+      return res.status(200).json(JSON.parse(cached))
+    }
+
     const likedRecords = await LikedPackage.find({ userId: req.userId }).lean()
 
     if (likedRecords.length === 0) {
-      return res.status(200).json({
+      const response = {
         message: 'No liked packages found',
         data: [],
-      })
+      }
+
+      await redis.set(REDIS_CACHE_KEY, JSON.stringify(response), 'EX', REDIS_TTL)
+
+      logger.info('cache miss')
+      return res.status(200).json(response)
     }
 
     const packageIds = [
@@ -686,20 +711,30 @@ const getLikedPackages = async(req: Request, res: Response) => {
     ]
 
     if (packageIds.length === 0) {
-      return res.status(200).json({
+      const response = {
         message: 'No valid liked package ids found',
         data: [],
-      })
+      }
+
+      await redis.set(REDIS_CACHE_KEY, JSON.stringify(response), 'EX', REDIS_TTL)
+
+      logger.info('cache miss')
+      return res.status(200).json(response)
     }
 
     const likedPackages = await Package.find({ _id: { $in: packageIds } })
       .populate(packagePopulateConfig)
       .sort({ updatedAt: -1 })
 
-    return res.status(200).json({
+    const response = {
       message: 'Liked packages fetched successfully',
       data: likedPackages
-    })
+    }
+
+    await redis.set(REDIS_CACHE_KEY, JSON.stringify(response), 'EX', REDIS_TTL)
+
+    logger.info('cache miss')
+    return res.status(200).json(response)
 
   } catch (error) {
     logger.error(`Error fetching liked packages: ${error}`)
