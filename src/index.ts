@@ -10,10 +10,14 @@ import connectDB from './config/db'
 
 import logger from './config/logger'
 
-import packageRoutes from './routes/package.routes'
-import profileRoutes from './routes/profile.routes'
-import hotelRoutes from './routes/hotel.routes'
-import vehicleRoutes from './routes/vehicle.routes'
+import publicPackageRoutes from './routes/package/public.routes'
+import privatePackageRoutes from './routes/package/private.routes'
+import publicProfileRoutes from './routes/profile/public.routes'
+import privateProfileRoutes from './routes/profile/private.routes'
+import publicHotelRoutes from './routes/hotel/public.routes'
+import privateHotelRoutes from './routes/hotel/private.routes'
+import publicVehicleRoutes from './routes/vehicle/public.routes'
+import privateVehicleRoutes from './routes/vehicle/private.routes'
 
 const app = express()
 
@@ -39,10 +43,14 @@ app.get('/', (_req, res) => {
 
 app.use('/v1/api', protectedRoutes)
 app.use('/v1/api/auth', authRoutes)
-app.use('/v1/api/packages/', firebaseAuthMiddleware, attachCurrentUser, packageRoutes)
-app.use('/v1/api/profile/', firebaseAuthMiddleware, attachCurrentUser, profileRoutes)
-app.use('/v1/api/hotels/', firebaseAuthMiddleware, attachCurrentUser, hotelRoutes)
-app.use('/v1/api/vehicles/', firebaseAuthMiddleware, attachCurrentUser, vehicleRoutes)
+app.use('/v1/api/packages', publicPackageRoutes)
+app.use('/v1/api/packages', firebaseAuthMiddleware, attachCurrentUser, privatePackageRoutes)
+app.use('/v1/api/profile', publicProfileRoutes)
+app.use('/v1/api/profile', firebaseAuthMiddleware, attachCurrentUser, privateProfileRoutes)
+app.use('/v1/api/hotels', publicHotelRoutes)
+app.use('/v1/api/hotels', firebaseAuthMiddleware, attachCurrentUser, privateHotelRoutes)
+app.use('/v1/api/vehicles', publicVehicleRoutes)
+app.use('/v1/api/vehicles', firebaseAuthMiddleware, attachCurrentUser, privateVehicleRoutes)
 
 const PORT = process.env.PORT || 8080
 
