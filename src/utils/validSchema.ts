@@ -38,27 +38,114 @@ export const updateUserSchema = z.object({
 })
 
 // Package schemas
-export const createPackageSchema = z.object({
-    name: z.string().min(1, "Name is required"),
-    description: z.string().min(1, "Description is required"),
-    coverImage: z.string().min(1, "Cover image is required"),
-    season: z.string().min(1, "Season is required"),
-    budget: z.number().min(0, "Budget must be positive"),
-    destination: z.string().min(1, "Destination is required"),
-    spots: z.array(z.string()).default([]),
-    duration: z.number().min(1, "Duration must be at least 1 day"),
-    startDate: z.string().min(1, "Start date is required"),
-    endDate: z.string().min(1, "End date is required"),
-    identification: z.boolean().default(false),
-    permit: z.string().min(1, "Permit info is required"),
-    tags: z.array(z.string()).default([]),
-    affiliateLinks: z.array(z.string()).default([]),
-    additional: z.string().optional(),
-    hotels: z.array(z.string()).default([]),
-    vehicles: z.array(z.string()).default([]),
+const packageStatusSchema = z.enum(['draft', 'pending_approval', 'approved', 'rejected'])
+
+const optionalNumberSchema = z.preprocess(
+    (value) => (value === '' || value === null ? undefined : value),
+    z.number().min(0).optional(),
+)
+
+const optionalPositiveNumberSchema = z.preprocess(
+    (value) => (value === '' || value === null ? undefined : value),
+    z.number().min(1).optional(),
+)
+
+const draftHotelSchema = z.object({
+    name: z.string().trim().optional(),
+    phoneNumber: z.string().trim().optional(),
+    address: z.string().trim().optional(),
+    photos: z.array(z.string().trim()).optional(),
+    budget: optionalNumberSchema,
 })
 
-export const updatePackageSchema = createPackageSchema.partial()
+const draftVehicleSchema = z.object({
+    car: z.string().trim().optional(),
+    carNumber: z.string().trim().optional(),
+    driverName: z.string().trim().optional(),
+    driverPhoneNumber: z.string().trim().optional(),
+    vehicleType: z.string().trim().optional(),
+    budget: optionalNumberSchema,
+})
+
+const submittedDraftHotelSchema = z.object({
+    name: z.string().trim().min(1, 'Hotel name is required'),
+    phoneNumber: z.string().trim().min(1, 'Hotel phone number is required'),
+    address: z.string().trim().min(1, 'Hotel address is required'),
+    photos: z.array(z.string().trim()).default([]),
+    budget: z.number().min(0, 'Hotel budget must be positive'),
+})
+
+const submittedDraftVehicleSchema = z.object({
+    car: z.string().trim().min(1, 'Vehicle name is required'),
+    carNumber: z.string().trim().min(1, 'Vehicle number is required'),
+    driverName: z.string().trim().optional(),
+    driverPhoneNumber: z.string().trim().min(1, 'Driver phone number is required'),
+    vehicleType: z.string().trim().optional(),
+    budget: z.number().min(0, 'Vehicle budget must be positive'),
+})
+
+const packageSubmissionBaseSchema = z.object({
+    name: z.string().trim().min(1, "Name is required"),
+    description: z.string().trim().min(1, "Description is required"),
+    coverImage: z.string().trim().min(1, "Cover image is required"),
+    season: z.string().trim().min(1, "Season is required"),
+    budget: z.number().min(0, "Budget must be positive"),
+    destination: z.string().trim().min(1, "Destination is required"),
+    spots: z.array(z.string().trim()).default([]),
+    duration: z.number().min(1, "Duration must be at least 1 day"),
+    startDate: z.string().trim().min(1, "Start date is required"),
+    endDate: z.string().trim().min(1, "End date is required"),
+    identification: z.boolean().default(false),
+    permit: z.string().trim().min(1, "Permit info is required"),
+    tags: z.array(z.string().trim()).default([]),
+    affiliateLinks: z.array(z.string().trim()).default([]),
+    additional: z.string().trim().optional(),
+    hotels: z.array(z.string()).default([]),
+    vehicles: z.array(z.string()).default([]),
+    draftHotels: z.array(submittedDraftHotelSchema).default([]),
+    draftVehicles: z.array(submittedDraftVehicleSchema).default([]),
+})
+
+export const createPackageSchema = packageSubmissionBaseSchema
+    .refine((data) => data.endDate >= data.startDate, {
+        message: 'End date cannot be earlier than start date',
+        path: ['endDate'],
+    })
+
+export const draftPackageSchema = z
+    .object({
+        name: z.string().trim().optional(),
+        description: z.string().trim().optional(),
+        coverImage: z.string().trim().optional(),
+        season: z.string().trim().optional(),
+        budget: optionalNumberSchema,
+        destination: z.string().trim().optional(),
+        spots: z.array(z.string().trim()).optional(),
+        duration: optionalNumberSchema,
+        startDate: z.string().trim().optional(),
+        endDate: z.string().trim().optional(),
+        identification: z.boolean().optional(),
+        permit: z.string().trim().optional(),
+        tags: z.array(z.string().trim()).optional(),
+        affiliateLinks: z.array(z.string().trim()).optional(),
+        additional: z.string().trim().optional(),
+        hotels: z.array(z.string()).optional(),
+        vehicles: z.array(z.string()).optional(),
+        draftHotels: z.array(draftHotelSchema).optional(),
+        draftVehicles: z.array(draftVehicleSchema).optional(),
+        status: packageStatusSchema.optional(),
+    })
+    .refine((data) => !(data.startDate && data.endDate && data.endDate < data.startDate), {
+        message: 'End date cannot be earlier than start date',
+        path: ['endDate'],
+    })
+
+export const updatePackageSchema = packageSubmissionBaseSchema
+    .partial()
+    .refine((data) => !(data.startDate && data.endDate && data.endDate < data.startDate), {
+        message: 'End date cannot be earlier than start date',
+        path: ['endDate'],
+    })
 
 export const createHotelSchema = z.object({
     name: z.string().min(1, 'Hotel name is required'),
@@ -138,6 +225,7 @@ export const createReviewSchema = z.object({
 export type CreateUserInput = z.infer<typeof createUserSchema>
 export type UpdateUserInput = z.infer<typeof updateUserSchema>
 export type CreatePackageInput = z.infer<typeof createPackageSchema>
+export type DraftPackageInput = z.infer<typeof draftPackageSchema>
 export type UpdatePackageInput = z.infer<typeof updatePackageSchema>
 export type CreateHotelInput = z.infer<typeof createHotelSchema>
 export type UpdateHotelInput = z.infer<typeof updateHotelSchema>
