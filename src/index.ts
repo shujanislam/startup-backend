@@ -20,6 +20,7 @@ import publicHotelRoutes from './routes/hotel/public.routes'
 import privateHotelRoutes from './routes/hotel/private.routes'
 import publicVehicleRoutes from './routes/vehicle/public.routes'
 import privateVehicleRoutes from './routes/vehicle/private.routes'
+import healthRoutes from './routes/health.routes'
 
 const app = express()
 
@@ -43,6 +44,7 @@ app.get('/', (_req, res) => {
   res.json({ message: 'Backend is running' })
 })
 
+app.use('/', healthRoutes)
 app.use('/v1/api', protectedRoutes)
 app.use('/v1/api/auth', authRoutes)
 app.use('/v1/api/packages', publicRateLimit, publicPackageRoutes)
