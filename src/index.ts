@@ -10,6 +10,8 @@ import connectDB from './config/db'
 
 import logger from './config/logger'
 
+import { publicRateLimit, privateRateLimit } from './middleware/rateLimit'
+
 import publicPackageRoutes from './routes/package/public.routes'
 import privatePackageRoutes from './routes/package/private.routes'
 import publicProfileRoutes from './routes/profile/public.routes'
@@ -43,14 +45,14 @@ app.get('/', (_req, res) => {
 
 app.use('/v1/api', protectedRoutes)
 app.use('/v1/api/auth', authRoutes)
-app.use('/v1/api/packages', publicPackageRoutes)
-app.use('/v1/api/packages', firebaseAuthMiddleware, attachCurrentUser, privatePackageRoutes)
-app.use('/v1/api/profile', publicProfileRoutes)
-app.use('/v1/api/profile', firebaseAuthMiddleware, attachCurrentUser, privateProfileRoutes)
-app.use('/v1/api/hotels', publicHotelRoutes)
-app.use('/v1/api/hotels', firebaseAuthMiddleware, attachCurrentUser, privateHotelRoutes)
-app.use('/v1/api/vehicles', publicVehicleRoutes)
-app.use('/v1/api/vehicles', firebaseAuthMiddleware, attachCurrentUser, privateVehicleRoutes)
+app.use('/v1/api/packages', publicRateLimit, publicPackageRoutes)
+app.use('/v1/api/packages', firebaseAuthMiddleware, attachCurrentUser, privateRateLimit, privatePackageRoutes)
+app.use('/v1/api/profile', publicRateLimit, publicProfileRoutes)
+app.use('/v1/api/profile', firebaseAuthMiddleware, attachCurrentUser, privateRateLimit, privateProfileRoutes)
+app.use('/v1/api/hotels', publicRateLimit, publicHotelRoutes)
+app.use('/v1/api/hotels', firebaseAuthMiddleware, attachCurrentUser, privateRateLimit, privateHotelRoutes)
+app.use('/v1/api/vehicles', publicRateLimit, publicVehicleRoutes)
+app.use('/v1/api/vehicles', firebaseAuthMiddleware, attachCurrentUser, privateRateLimit, privateVehicleRoutes)
 
 const PORT = process.env.PORT || 8080
 
