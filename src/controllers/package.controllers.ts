@@ -367,10 +367,28 @@ const viewPackage = async (req: Request, res: Response) => {
     const cached = await redis.get(REDIS_CACHE_KEY)
 
     if(cached){
+      const cachedPackage = JSON.parse(cached)
+
+      if (!cachedPackage?.createdByName) {
+        const createdByName = await getUserNameByIdentifier(String(cachedPackage?.createdBy || ''))
+        const enrichedCachedPackage = {
+          ...cachedPackage,
+          createdByName,
+        }
+
+        await redis.set(REDIS_CACHE_KEY, JSON.stringify(enrichedCachedPackage), 'EX', REDIS_TTL)
+
+        void Package.updateOne({ _id: packageId }, viewIncrement).catch((error) => {
+          logger.error(`Failed to update package views for ${packageId}: ${error}`)
+        })
+
+        return res.status(200).json(enrichedCachedPackage)
+      }
+
       void Package.updateOne({ _id: packageId }, viewIncrement).catch((error) => {
         logger.error(`Failed to update package views for ${packageId}: ${error}`)
       })
-      return res.status(200).json(JSON.parse(cached))
+      return res.status(200).json(cachedPackage)
     }
 
     const packageData = await Package.findById(packageId).populate(packagePopulateConfig)
@@ -405,7 +423,7 @@ const viewPackage = async (req: Request, res: Response) => {
     })
     }
 
-    return res.status(200).json(packageData)
+    return res.status(200).json(packageResponse)
   } catch (error) {
     logger.error(`Error fetching package ${packageId}: ${error}`)
     return res.status(500).json({ message: 'Failed to fetch package' })
@@ -1072,15 +1090,33 @@ const getPackageReviews = async (req: Request, res: Response) => {
       .sort({ createdAt: -1 })
       .lean()
 
-    const userIds = [...new Set(reviews.map((r) => r.userId).filter(Boolean))]
-    const users = await User.find({ firebaseId: { $in: userIds } })
-      .select('firebaseId name profilePicture')
-      .lean()
+    const userIds = [...new Set(reviews.map((r) => String(r.userId || '')).filter((id) => id.length > 0))]
+    const objectIdUserIds = userIds.filter(isObjectIdString)
 
-    const userMap = new Map(users.map((u) => [u.firebaseId, u]))
+    const userFilters: Array<Record<string, unknown>> = []
+
+    if (objectIdUserIds.length > 0) {
+      userFilters.push({ _id: { $in: objectIdUserIds } })
+    }
+
+    if (userIds.length > 0) {
+      userFilters.push({ firebaseId: { $in: userIds } })
+    }
+
+    const users = userFilters.length > 0
+      ? await User.find({ $or: userFilters }).select('_id firebaseId name profilePicture').lean()
+      : []
+
+    const userMap = new Map<string, { name?: string; profilePicture?: string }>()
+    for (const user of users) {
+      if (user.firebaseId) {
+        userMap.set(user.firebaseId, user)
+      }
+      userMap.set(String(user._id), user)
+    }
 
     const enrichedReviews = reviews.map((r) => {
-      const reviewer = userMap.get(r.userId)
+      const reviewer = userMap.get(String(r.userId))
       return {
         ...r,
         userName: reviewer?.name ?? 'Anonymous',
