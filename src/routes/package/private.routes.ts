@@ -7,6 +7,7 @@ import {
   getDraftPackages,
   getEditablePackage,
   getLikedPackages,
+  getPackageDetails,
   getPendingPackages,
   getReviewEligibility,
   likePackage,
@@ -24,6 +25,7 @@ const privatePackageRoutes = Router()
 
 privatePackageRoutes.get('/my-draft-packages', getDraftPackages)
 privatePackageRoutes.get('/pending-packages', getPendingPackages)
+privatePackageRoutes.get('/package-details/:id', getPackageDetails)
 privatePackageRoutes.get('/edit-package/:id', getEditablePackage)
 privatePackageRoutes.post('/draft-package', createDraftPackage)
 privatePackageRoutes.post('/post-package', postPackage)

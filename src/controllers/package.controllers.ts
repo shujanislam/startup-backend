@@ -14,6 +14,10 @@ import UserPackageReveal from '../models/UserPackageReveal'
 
 import LikedPackage from '../models/LikedPackage'
 
+import Hotel from '../models/Hotel'
+
+import Vehicle from '../models/Vehicle'
+
 import type { PopulateOptions } from 'mongoose'
 
 import {
@@ -23,21 +27,13 @@ import {
   updatePackageSchema,
   createReviewSchema,
   sortPackageSchema,
+  type CreatePackageInput,
+  type DraftPackageInput,
 } from '../utils/validSchema'
 
 import { checkAdminRole } from '../utils/roleCheck'
 
 import { buildReviewEligibility } from '../utils/reviewEligibility'
-
-import {
-  normalizeStringList,
-  normalizeDraftHotels,
-  normalizeDraftVehicles,
-  normalizeDraftPayload,
-  normalizeObjectIdList,
-} from '../utils/draftNormalizer'
-
-import { createRelatedPackageRecords } from '../utils/packageHelpers'
 
 const packagePopulateConfig: PopulateOptions[] = [
   { path: 'hotels', select: 'name phoneNumber address photos budget' },
@@ -70,13 +66,41 @@ const pendingPackageQuery = {
   ],
 }
 
-const getPackageStatus = (packageData: Pick<IPackage, 'status' | 'approved'>): PackageStatus => {
-  if (packageData.status) {
+type PackageStatusCandidate = {
+  status?: PackageStatus
+  approved: boolean
+  $isDefault?: (path?: string) => boolean
+}
+
+const getPackageStatus = (packageData: PackageStatusCandidate): PackageStatus => {
+  if (packageData.approved || packageData.status === PACKAGE_STATUSES.approved) {
+    return PACKAGE_STATUSES.approved
+  }
+
+  const statusWasDefaulted =
+    typeof packageData.$isDefault === 'function' && packageData.$isDefault('status')
+
+  if (packageData.status && !statusWasDefaulted) {
     return packageData.status
   }
 
-  return packageData.approved ? PACKAGE_STATUSES.approved : PACKAGE_STATUSES.pendingApproval
+  return PACKAGE_STATUSES.pendingApproval
 }
+
+const normalizePackageStatusForResponse = <T extends PackageStatusCandidate | null>(packageData: T): T => {
+  if (!packageData) {
+    return packageData
+  }
+
+  const status = getPackageStatus(packageData)
+  packageData.status = status
+  packageData.approved = status === PACKAGE_STATUSES.approved
+
+  return packageData
+}
+
+const normalizePackageListForResponse = <T extends PackageStatusCandidate>(packages: T[]): T[] =>
+  packages.map((packageData) => normalizePackageStatusForResponse(packageData))
 
 const isPackageOwner = (packageData: Pick<IPackage, 'createdBy'>, userId: string) =>
   String(packageData.createdBy) === userId
@@ -131,6 +155,111 @@ const clearPackageCaches = async (packageId?: unknown, userId?: unknown) => {
   } catch (error) {
     logger.error(`Failed to clear package cache: ${error}`)
   }
+}
+
+const normalizeStringList = (items?: string[]) =>
+  (items ?? []).map((item) => item.trim()).filter(Boolean)
+
+const normalizeDraftHotels = (hotels?: DraftPackageInput['draftHotels']) =>
+  (hotels ?? [])
+    .filter(hasMeaningfulValue)
+    .map((hotel) => ({
+      name: hotel.name?.trim() ?? '',
+      phoneNumber: hotel.phoneNumber?.trim() ?? '',
+      address: hotel.address?.trim() ?? '',
+      photos: normalizeStringList(hotel.photos),
+      ...(hotel.budget !== undefined ? { budget: hotel.budget } : {}),
+    }))
+
+const normalizeDraftVehicles = (vehicles?: DraftPackageInput['draftVehicles']) =>
+  (vehicles ?? [])
+    .filter(hasMeaningfulValue)
+    .map((vehicle) => ({
+      car: vehicle.car?.trim() ?? '',
+      carNumber: vehicle.carNumber?.trim() ?? '',
+      driverName: vehicle.driverName?.trim() ?? '',
+      driverPhoneNumber: vehicle.driverPhoneNumber?.trim() ?? '',
+      vehicleType: vehicle.vehicleType?.trim() ?? '',
+      ...(vehicle.budget !== undefined ? { budget: vehicle.budget } : {}),
+    }))
+
+const normalizeDraftPayload = (data: DraftPackageInput) => ({
+  ...data,
+  ...(data.spots ? { spots: normalizeStringList(data.spots) } : {}),
+  ...(data.tags ? { tags: normalizeStringList(data.tags) } : {}),
+  ...(data.affiliateLinks ? { affiliateLinks: normalizeStringList(data.affiliateLinks) } : {}),
+  ...(data.draftHotels ? { draftHotels: normalizeDraftHotels(data.draftHotels) } : {}),
+  ...(data.draftVehicles ? { draftVehicles: normalizeDraftVehicles(data.draftVehicles) } : {}),
+})
+
+const normalizeObjectIdList = (items: unknown[] | undefined) =>
+  (items ?? [])
+    .map((item) => String(item))
+    .filter(Boolean)
+
+const buildSubmissionCandidate = (
+  existingPackage: IPackage,
+  incomingData: unknown,
+): Record<string, unknown> => {
+  const existing = existingPackage.toObject() as Record<string, unknown>
+  const incoming = incomingData && typeof incomingData === 'object'
+    ? incomingData as Record<string, unknown>
+    : {}
+
+  return {
+    name: existing.name,
+    description: existing.description,
+    coverImage: existing.coverImage,
+    season: existing.season,
+    budget: existing.budget,
+    destination: existing.destination,
+    spots: existing.spots,
+    duration: existing.duration,
+    startDate: existing.startDate,
+    endDate: existing.endDate,
+    identification: existing.identification,
+    permit: existing.permit,
+    tags: existing.tags,
+    affiliateLinks: existing.affiliateLinks,
+    additional: existing.additional,
+    hotels: normalizeObjectIdList(existing.hotels as unknown[] | undefined),
+    vehicles: normalizeObjectIdList(existing.vehicles as unknown[] | undefined),
+    draftHotels: existing.draftHotels,
+    draftVehicles: existing.draftVehicles,
+    ...incoming,
+  }
+}
+
+const createRelatedPackageRecords = async (
+  data: CreatePackageInput,
+  userId: string,
+): Promise<{ hotels: string[]; vehicles: string[] }> => {
+  const hotelIds = [...data.hotels]
+  const vehicleIds = [...data.vehicles]
+
+  if (data.draftHotels.length > 0) {
+    const createdHotels = await Hotel.insertMany(
+      data.draftHotels.map((hotel) => ({
+        ...hotel,
+        createdBy: userId,
+      })),
+    )
+
+    hotelIds.push(...createdHotels.map((hotel) => hotel._id.toString()))
+  }
+
+  if (data.draftVehicles.length > 0) {
+    const createdVehicles = await Vehicle.insertMany(
+      data.draftVehicles.map((vehicle) => ({
+        ...vehicle,
+        createdBy: userId,
+      })),
+    )
+
+    vehicleIds.push(...createdVehicles.map((vehicle) => vehicle._id.toString()))
+  }
+
+  return { hotels: hotelIds, vehicles: vehicleIds }
 }
 
 const canManagePackage = async (packageData: IPackage, userId: string) => {
@@ -195,9 +324,8 @@ const viewPackage = async (req: Request, res: Response) => {
       }
       isAdmin = roleCheck.ok
     }
-    const packageStatus = getPackageStatus(packageData)
     const canViewPackage =
-      packageStatus === PACKAGE_STATUSES.approved ||
+      getPackageStatus(packageData) === PACKAGE_STATUSES.approved ||
       (req.userId ? isPackageOwner(packageData, req.userId) : false) ||
       isAdmin
 
@@ -205,9 +333,7 @@ const viewPackage = async (req: Request, res: Response) => {
       return res.status(404).json({ message: 'Package not found' })
     }
 
-    if (packageStatus === PACKAGE_STATUSES.approved) {
-      await redis.set(REDIS_CACHE_KEY, JSON.stringify(packageData), 'EX', REDIS_TTL)
-    }
+    await redis.set(REDIS_CACHE_KEY, JSON.stringify(packageData), 'EX', REDIS_TTL)
 
     return res.status(200).json(packageData)
   } catch (error) {
@@ -440,6 +566,44 @@ const getDraftPackages = async (req: Request, res: Response) => {
   }
 }
 
+const getPackageDetails = async (req: Request, res: Response) => {
+  if (!req.userId) {
+    return res.status(401).json({ message: 'Unauthorized' })
+  }
+
+  const packageId = req.params.id
+
+  if (!packageId) {
+    return res.status(400).json({ message: 'Package id is required' })
+  }
+
+  try {
+    const packageData = await Package.findById(packageId).populate(packagePopulateConfig)
+
+    if (!packageData) {
+      return res.status(404).json({ message: 'Package not found' })
+    }
+
+    const { isAdmin, isOwner } = await canManagePackage(packageData, req.userId)
+    const canView =
+      getPackageStatus(packageData) === PACKAGE_STATUSES.approved ||
+      isOwner ||
+      isAdmin
+
+    if (!canView) {
+      return res.status(404).json({ message: 'Package not found' })
+    }
+
+    return res.status(200).json({
+      message: 'Package details fetched successfully',
+      data: packageData,
+    })
+  } catch (error) {
+    logger.error(`Error fetching package details: ${error}`)
+    return res.status(500).json({ message: 'Failed to fetch package details' })
+  }
+}
+
 const getEditablePackage = async (req: Request, res: Response) => {
   if (!req.userId) {
     return res.status(401).json({ message: 'Unauthorized' })
@@ -538,7 +702,7 @@ const updateDraftPackage = async (req: Request, res: Response) => {
 
     return res.status(200).json({
       message: 'Draft package updated successfully',
-      data: updatedPackage,
+      data: normalizePackageStatusForResponse(updatedPackage),
     })
   } catch (error) {
     logger.error(`Error updating draft package: ${error}`)
@@ -577,29 +741,10 @@ const submitPackageForApproval = async (req: Request, res: Response) => {
       return res.status(409).json({ message: 'Only draft or rejected packages can be submitted for approval' })
     }
 
-    const submissionCandidate = {
-      name: existingPackage.name,
-      description: existingPackage.description,
-      coverImage: existingPackage.coverImage,
-      season: existingPackage.season,
-      budget: existingPackage.budget,
-      destination: existingPackage.destination,
-      spots: existingPackage.spots,
-      duration: existingPackage.duration,
-      startDate: existingPackage.startDate,
-      endDate: existingPackage.endDate,
-      identification: existingPackage.identification,
-      permit: existingPackage.permit,
-      tags: existingPackage.tags,
-      affiliateLinks: existingPackage.affiliateLinks,
-      additional: existingPackage.additional,
-      hotels: normalizeObjectIdList(existingPackage.hotels as unknown[] | undefined),
-      vehicles: normalizeObjectIdList(existingPackage.vehicles as unknown[] | undefined),
-      draftHotels: existingPackage.draftHotels,
-      draftVehicles: existingPackage.draftVehicles,
-    }
-
-    const validation = validateSchema(createPackageSchema, submissionCandidate)
+    const validation = validateSchema(
+      createPackageSchema,
+      buildSubmissionCandidate(existingPackage, req.body),
+    )
 
     if (!validation.success) {
       return res.status(400).json({
@@ -642,7 +787,7 @@ const submitPackageForApproval = async (req: Request, res: Response) => {
 
     return res.status(200).json({
       message: 'Package submitted for approval successfully',
-      data: updatedPackage,
+      data: normalizePackageStatusForResponse(updatedPackage),
     })
   } catch (error) {
     logger.error(`Error submitting package for approval: ${error}`)
@@ -724,7 +869,7 @@ const updatePackage = async (req: Request, res: Response) => {
         shouldRequireReapproval
           ? 'Package updated successfully and requires re-approval'
           : 'Package updated successfully',
-      data: updatedPackage,
+      data: normalizePackageStatusForResponse(updatedPackage),
     })
   } catch (error) {
     logger.error(`Error updating package: ${error}`)
@@ -964,9 +1109,11 @@ const getPendingPackages = async (req: Request, res: Response) => {
       return res.status(roleCheck.status).json({ message: roleCheck.message })
     }
 
-    const packages = await Package.find(pendingPackageQuery)
-      .populate(packagePopulateConfig)
-      .sort({ createdAt: -1 })
+    const packages = normalizePackageListForResponse(
+      await Package.find(pendingPackageQuery)
+        .populate(packagePopulateConfig)
+        .sort({ createdAt: -1 })
+    )
 
     return res.status(200).json(packages)
   } catch (error) {
@@ -1023,7 +1170,7 @@ const approvePackage = async(req: Request, res: Response) => {
 
     return res.status(200).json({
       message: 'Package approved successfully',
-      data: approvedPackage,
+      data: normalizePackageStatusForResponse(approvedPackage),
     })
   } catch (error) {
     logger.error(`Error approving package: ${error}`)
@@ -1070,7 +1217,7 @@ const unapprovePackage = async(req: Request, res: Response) => {
 
     return res.status(200).json({
       message: 'Package moved back to pending approval successfully',
-      data: unapprovedPackage,
+      data: normalizePackageStatusForResponse(unapprovedPackage),
     })
   } catch (error) {
     logger.error(`Error unapproving package: ${error}`)
@@ -1126,7 +1273,7 @@ const rejectPackage = async(req: Request, res: Response) => {
 
     return res.status(200).json({
       message: 'Package rejected successfully',
-      data: rejectedPackage,
+      data: normalizePackageStatusForResponse(rejectedPackage),
     })
   } catch (error) {
     logger.error(`Error rejecting package: ${error}`)
@@ -1158,7 +1305,10 @@ const revealPackage = async(req: Request, res: Response) => {
     })
 
     if (alreadyRevealed) {
-      return res.status(200).json({ message: 'Package already revealed', data: existingPackage })
+      return res.status(200).json({
+        message: 'Package already revealed',
+        data: normalizePackageStatusForResponse(existingPackage),
+      })
     }
 
     await UserPackageReveal.create({
@@ -1166,7 +1316,10 @@ const revealPackage = async(req: Request, res: Response) => {
       userId: req.userId,
     })
 
-    return res.status(200).json({ message: 'Package revealed successfully', data: existingPackage })
+    return res.status(200).json({
+      message: 'Package revealed successfully',
+      data: normalizePackageStatusForResponse(existingPackage),
+    })
   }
   catch(err: any){
     logger.error(err.message)
@@ -1198,7 +1351,11 @@ const likePackage = async(req: Request, res: Response) => {
     })
 
     if (alreadyLikedPackage) {
-      return res.status(200).json({ message: 'Package already liked', data: existingPackage, alreadyLiked: true })
+      return res.status(200).json({
+        message: 'Package already liked',
+        data: normalizePackageStatusForResponse(existingPackage),
+        alreadyLiked: true,
+      })
     }
 
     await LikedPackage.create({
@@ -1206,7 +1363,11 @@ const likePackage = async(req: Request, res: Response) => {
       userId: req.userId,
     })
 
-    return res.status(200).json({ message: 'Package liked successfully', data: existingPackage, alreadyLiked: false })
+    return res.status(200).json({
+      message: 'Package liked successfully',
+      data: normalizePackageStatusForResponse(existingPackage),
+      alreadyLiked: false,
+    })
   }
   catch(err: any){
     logger.error(err.message)
@@ -1263,14 +1424,14 @@ const getLikedPackages = async(req: Request, res: Response) => {
       return res.status(200).json(response)
     }
 
-    const likedPackages = await Package.find({
+    const likedPackages = normalizePackageListForResponse(await Package.find({
       $and: [
         { _id: { $in: packageIds } },
         approvedPackageQuery,
       ],
     })
       .populate(packagePopulateConfig)
-      .sort({ updatedAt: -1 })
+      .sort({ updatedAt: -1 }))
 
     const response = {
       message: 'Liked packages fetched successfully',
@@ -1297,6 +1458,7 @@ export {
   postPackage,
   createDraftPackage,
   getDraftPackages,
+  getPackageDetails,
   getEditablePackage,
   updateDraftPackage,
   submitPackageForApproval,
