@@ -35,6 +35,8 @@ import { checkAdminRole } from '../utils/roleCheck'
 
 import { buildReviewEligibility } from '../utils/reviewEligibility'
 
+import { computeFeaturedPackageScore, getCurrentMonthKey } from '../utils/featuredPackage'
+
 const packagePopulateConfig: PopulateOptions[] = [
   { path: 'hotels', select: 'name phoneNumber address photos budget' },
   { path: 'vehicles', select: 'car carNumber driverName driverPhoneNumber vehicleType budget' },
@@ -44,6 +46,50 @@ const REVIEW_DELAY_DAYS = 3
 const REVIEW_DELAY_MS = REVIEW_DELAY_DAYS * 24 * 60 * 60 * 1000
 
 const REDIS_TTL = 3600
+const FEATURED_REDIS_TTL = 900
+
+const toIdString = (value: unknown): string => {
+  if (typeof value === 'string') {
+    return value
+  }
+
+  if (value && typeof value === 'object' && 'toString' in value) {
+    return String(value)
+  }
+
+  return ''
+}
+
+const getMonthlyViewCount = (monthlyViews: unknown, monthKey: string): number => {
+  if (!monthlyViews) {
+    return 0
+  }
+
+  if (monthlyViews instanceof Map) {
+    return Number(monthlyViews.get(monthKey) || 0)
+  }
+
+  if (typeof monthlyViews === 'object') {
+    const record = monthlyViews as Record<string, unknown>
+    return Number(record[monthKey] || 0)
+  }
+
+  return 0
+}
+
+const isObjectIdString = (value: string): boolean => /^[a-f\d]{24}$/i.test(value)
+
+const getUserNameByIdentifier = async (identifier: string): Promise<string> => {
+  if (!identifier) {
+    return 'Anonymous'
+  }
+
+  const user = isObjectIdString(identifier)
+    ? await User.findById(identifier).select('name').lean()
+    : await User.findOne({ firebaseId: identifier }).select('name').lean()
+
+  return user?.name || 'Anonymous'
+}
 
 const PACKAGE_STATUSES = {
   draft: 'draft',
@@ -298,8 +344,165 @@ const getPackages = async (req: Request, res: Response) => {
   }
 }
 
+const getFeaturedPackage = async (_req: Request, res: Response) => {
+  const REDIS_CACHE_KEY = 'packages:featured:best'
+
+  try {
+    const cached = await redis.get(REDIS_CACHE_KEY)
+
+    if (cached) {
+      logger.info('cache hit')
+      return res.status(200).json(JSON.parse(cached))
+    }
+
+    const now = new Date()
+    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+    const monthKey = getCurrentMonthKey()
+
+    const approvedPackages = await Package.find({ approved: true }).lean()
+
+    if (approvedPackages.length === 0) {
+      return res.status(404).json({ message: 'No approved packages found' })
+    }
+
+    const packageIds = approvedPackages
+      .map((pkg) => toIdString(pkg._id))
+      .filter((id) => id.length > 0)
+
+    const likesLast7Days = await LikedPackage.aggregate([
+      { $match: { packageId: { $in: packageIds }, createdAt: { $gte: sevenDaysAgo } } },
+      { $group: { _id: '$packageId', count: { $sum: 1 } } },
+    ])
+
+    const likesAllTime = await LikedPackage.aggregate([
+      { $match: { packageId: { $in: packageIds } } },
+      { $group: { _id: '$packageId', count: { $sum: 1 } } },
+    ])
+
+    const reviewsLast7Days = await PackageReview.aggregate([
+      { $match: { packageId: { $in: packageIds }, createdAt: { $gte: sevenDaysAgo } } },
+      {
+        $group: {
+          _id: '$packageId',
+          avgRating: { $avg: '$rating' },
+          reviewCount: { $sum: 1 },
+        },
+      },
+    ])
+
+    const likesLast7DayMap = new Map(likesLast7Days.map((item) => [String(item._id), Number(item.count || 0)]))
+    const likesAllTimeMap = new Map(likesAllTime.map((item) => [String(item._id), Number(item.count || 0)]))
+    const reviewMap = new Map(
+      reviewsLast7Days.map((item) => [
+        String(item._id),
+        {
+          avgRating: Number(item.avgRating || 0),
+          reviewCount: Number(item.reviewCount || 0),
+        },
+      ]),
+    )
+
+    const packageMetrics = approvedPackages.map((pkg) => {
+      const id = toIdString(pkg._id)
+      const likes7d = likesLast7DayMap.get(id) || 0
+      const reviewStats = reviewMap.get(id)
+      const reviewCount7d = reviewStats?.reviewCount || 0
+
+      return {
+        packageDoc: pkg,
+        id,
+        monthlyViews: getMonthlyViewCount((pkg as { monthlyViews?: unknown }).monthlyViews, monthKey),
+        likes7d,
+        avgRating7d: reviewStats?.avgRating || 0,
+        reviewCount7d,
+        hasEngagement: likes7d > 0 || reviewCount7d > 0,
+      }
+    })
+
+    const scoredCandidates = packageMetrics.filter((item) => item.hasEngagement)
+
+    let selected = null as null | (typeof packageMetrics)[number]
+
+    if (scoredCandidates.length > 0) {
+      const maxMonthlyViews = scoredCandidates.reduce((max, item) => Math.max(max, item.monthlyViews), 0)
+      const maxLikes7d = scoredCandidates.reduce((max, item) => Math.max(max, item.likes7d), 0)
+
+      selected = scoredCandidates
+        .map((item) => ({
+          ...item,
+          score: computeFeaturedPackageScore(
+            {
+              monthlyViews: item.monthlyViews,
+              likesLast7Days: item.likes7d,
+              avgRatingLast7Days: item.avgRating7d,
+              reviewCountLast7Days: item.reviewCount7d,
+              createdAt: new Date(item.packageDoc.createdAt),
+            },
+            {
+              monthlyViews: maxMonthlyViews,
+              likesLast7Days: maxLikes7d,
+            },
+          ),
+        }))
+        .sort((a, b) => b.score - a.score)[0]
+    }
+
+    if (!selected) {
+      selected = [...packageMetrics]
+        .sort((a, b) => (b.likes7d - a.likes7d) || (b.monthlyViews - a.monthlyViews))[0]
+    }
+
+    if (!selected || selected.id.length === 0) {
+      return res.status(404).json({ message: 'No package available for featured slot' })
+    }
+
+    const selectedLikesAllTime = likesAllTimeMap.get(selected.id) || 0
+
+    if (selectedLikesAllTime === 0) {
+      const fallbackByAllTimeLikes = [...packageMetrics].sort((a, b) => {
+        const likeDiff = (likesAllTimeMap.get(b.id) || 0) - (likesAllTimeMap.get(a.id) || 0)
+        if (likeDiff !== 0) {
+          return likeDiff
+        }
+
+        return b.monthlyViews - a.monthlyViews
+      })[0]
+
+      if (fallbackByAllTimeLikes) {
+        selected = fallbackByAllTimeLikes
+      }
+    }
+
+    const featuredPackage = await Package.findById(selected.id).populate(packagePopulateConfig)
+
+    if (!featuredPackage) {
+      return res.status(404).json({ message: 'Featured package not found' })
+    }
+
+    const response = {
+      message: 'Featured package fetched successfully',
+      data: featuredPackage,
+    }
+
+    await redis.set(REDIS_CACHE_KEY, JSON.stringify(response), 'EX', FEATURED_REDIS_TTL)
+
+    logger.info('cache miss')
+    return res.status(200).json(response)
+  } catch (error) {
+    logger.error(`Error fetching featured package: ${error}`)
+    return res.status(500).json({ message: 'Failed to fetch featured package' })
+  }
+}
+
 const viewPackage = async (req: Request, res: Response) => { 
   const packageId = req.params.id 
+  const monthKey = getCurrentMonthKey()
+  const viewIncrement = {
+    $inc: {
+      views: 1,
+      [`monthlyViews.${monthKey}`]: 1,
+    },
+  }
 
   try {
     const REDIS_CACHE_KEY = `package:${packageId}`
@@ -307,7 +510,28 @@ const viewPackage = async (req: Request, res: Response) => {
     const cached = await redis.get(REDIS_CACHE_KEY)
 
     if(cached){
-      return res.status(200).json(JSON.parse(cached))
+      const cachedPackage = JSON.parse(cached)
+
+      if (!cachedPackage?.createdByName) {
+        const createdByName = await getUserNameByIdentifier(String(cachedPackage?.createdBy || ''))
+        const enrichedCachedPackage = {
+          ...cachedPackage,
+          createdByName,
+        }
+
+        await redis.set(REDIS_CACHE_KEY, JSON.stringify(enrichedCachedPackage), 'EX', REDIS_TTL)
+
+        void Package.updateOne({ _id: packageId }, viewIncrement).catch((error) => {
+          logger.error(`Failed to update package views for ${packageId}: ${error}`)
+        })
+
+        return res.status(200).json(enrichedCachedPackage)
+      }
+
+      void Package.updateOne({ _id: packageId }, viewIncrement).catch((error) => {
+        logger.error(`Failed to update package views for ${packageId}: ${error}`)
+      })
+      return res.status(200).json(cachedPackage)
     }
 
     const packageData = await Package.findById(packageId).populate(packagePopulateConfig)
@@ -333,9 +557,20 @@ const viewPackage = async (req: Request, res: Response) => {
       return res.status(404).json({ message: 'Package not found' })
     }
 
-    await redis.set(REDIS_CACHE_KEY, JSON.stringify(packageData), 'EX', REDIS_TTL)
+    const createdByName = await getUserNameByIdentifier(packageData.createdBy)
 
-    return res.status(200).json(packageData)
+    const packageResponse = {
+      ...packageData.toObject(),
+      createdByName,
+    }
+
+    await redis.set(REDIS_CACHE_KEY, JSON.stringify(packageResponse), 'EX', REDIS_TTL)
+
+    void Package.updateOne({ _id: packageData._id }, viewIncrement).catch((error) => {
+      logger.error(`Failed to update package views for ${packageId}: ${error}`)
+    })
+
+    return res.status(200).json(packageResponse)
   } catch (error) {
     logger.error(`Error fetching package ${packageId}: ${error}`)
     return res.status(500).json({ message: 'Failed to fetch package' })
@@ -1021,15 +1256,33 @@ const getPackageReviews = async (req: Request, res: Response) => {
       .sort({ createdAt: -1 })
       .lean()
 
-    const userIds = [...new Set(reviews.map((r) => r.userId).filter(Boolean))]
-    const users = await User.find({ firebaseId: { $in: userIds } })
-      .select('firebaseId name profilePicture')
-      .lean()
+    const userIds = [...new Set(reviews.map((r) => String(r.userId || '')).filter((id) => id.length > 0))]
+    const objectIdUserIds = userIds.filter(isObjectIdString)
 
-    const userMap = new Map(users.map((u) => [u.firebaseId, u]))
+    const userFilters: Array<Record<string, unknown>> = []
+
+    if (objectIdUserIds.length > 0) {
+      userFilters.push({ _id: { $in: objectIdUserIds } })
+    }
+
+    if (userIds.length > 0) {
+      userFilters.push({ firebaseId: { $in: userIds } })
+    }
+
+    const users = userFilters.length > 0
+      ? await User.find({ $or: userFilters }).select('_id firebaseId name profilePicture').lean()
+      : []
+
+    const userMap = new Map<string, { name?: string; profilePicture?: string }>()
+    for (const user of users) {
+      if (user.firebaseId) {
+        userMap.set(user.firebaseId, user)
+      }
+      userMap.set(String(user._id), user)
+    }
 
     const enrichedReviews = reviews.map((r) => {
-      const reviewer = userMap.get(r.userId)
+      const reviewer = userMap.get(String(r.userId))
       return {
         ...r,
         userName: reviewer?.name ?? 'Anonymous',
@@ -1452,6 +1705,7 @@ const getLikedPackages = async(req: Request, res: Response) => {
 
 export {
   getPackages,
+  getFeaturedPackage,
   viewPackage,
   discoverPackage,
   getPendingPackages,

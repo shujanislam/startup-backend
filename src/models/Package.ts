@@ -37,6 +37,8 @@ export interface IPackage extends Document {
   tags?: string[];
   affiliateLinks?: string[];
   additional?: string;
+  views?: number;
+  monthlyViews?: Record<string, number>;
   createdBy: string;
   approved: boolean;
   status: PackageStatus;
@@ -89,6 +91,8 @@ const packageSchema = new Schema<IPackage> (
     permit: { type: String, trim: true, default: '' },
     tags: { type: [String], default: [] },
     affiliateLinks: { type: [String], default: [] },
+    views: { type: Number, default: 0 },
+    monthlyViews: { type: Map, of: Number, default: {} },
     createdBy: { type: String, required: true, trim: true },
     additional: { type: String, trim: true },
     hotels: [{ type: Schema.Types.ObjectId, ref: 'Hotel', default: [] }],
