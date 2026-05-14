@@ -57,27 +57,28 @@ const getProfiles = async (req: Request, res: Response) => {
 
 const showProfile = async (req: Request, res: Response) => {
   const REDIS_CACHE_KEY = `profile:${req.params.id}`
-
+  
   try {
     const cached = await redis.get(REDIS_CACHE_KEY)
-
     if (cached) {
       logger.info('cache hit')
       return res.status(200).json(JSON.parse(cached))
     }
 
-    const profileId = req.params.id
-
-    const profile = await User.findById(profileId)
-
+    const profile = await User.findById(req.params.id)
     if (!profile) {
       return res.status(404).json({ message: 'Profile not found' })
     }
 
-    await redis.set(REDIS_CACHE_KEY, JSON.stringify(profile), 'EX', REDIS_TTL)
-
+    const response = {
+      profile,
+      ownProfile: req.userId === req.params.id,
+    }
+    
+    await redis.set(REDIS_CACHE_KEY, JSON.stringify(response), 'EX', REDIS_TTL)
     logger.info('cache miss')
-    return res.status(200).json(profile)
+    
+    return res.status(200).json(response)
   } catch (error) {
     logger.error(`Error fetching profile ${req.params.id}: ${error}`)
     return res.status(500).json({ message: 'Failed to fetch profile' })

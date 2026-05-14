@@ -331,10 +331,7 @@ const viewPackage = async (req: Request, res: Response) => {
 }
 
 const discoverPackage = async (req: Request, res: Response) => {
-  logger.info('discoverPackage endpoint called')
-
   const validation = validateSchema(sortPackageSchema, req.query)
-
   if (!validation.success) {
     return res.status(400).json({
       message: 'Validation failed',
@@ -358,10 +355,9 @@ const discoverPackage = async (req: Request, res: Response) => {
   } = validation.data
 
   try {
-    const query: Record<string, unknown> = {
-      approved: true,
-    }
+    const query: Record<string, unknown> = { approved: true }
 
+    // Text search across multiple fields
     if (search) {
       query.$or = [
         { name: { $regex: search, $options: 'i' } },
@@ -370,34 +366,27 @@ const discoverPackage = async (req: Request, res: Response) => {
       ]
     }
 
-    if (destination) {
-      query.destination = { $regex: destination, $options: 'i' }
-    }
+    // Single field filters
+    if (destination) query.destination = { $regex: destination, $options: 'i' }
+    if (season) query.season = { $regex: season, $options: 'i' }
+    if (tags?.length) query.tags = { $in: tags }
 
-    if (season) {
-      query.season = { $regex: season, $options: 'i' }
-    }
-
+    // Range filters
     if (minBudget !== undefined || maxBudget !== undefined) {
-      query.budget = {
-        ...(minBudget !== undefined ? { $gte: minBudget } : {}),
-        ...(maxBudget !== undefined ? { $lte: maxBudget } : {}),
-      }
+      query.budget = {}
+      if (minBudget !== undefined) query.budget.$gte = minBudget
+      if (maxBudget !== undefined) query.budget.$lte = maxBudget
     }
 
     if (minDuration !== undefined || maxDuration !== undefined) {
-      query.duration = {
-        ...(minDuration !== undefined ? { $gte: minDuration } : {}),
-        ...(maxDuration !== undefined ? { $lte: maxDuration } : {}),
-      }
+      query.duration = {}
+      if (minDuration !== undefined) query.duration.$gte = minDuration
+      if (maxDuration !== undefined) query.duration.$lte = maxDuration
     }
 
-    if (tags && tags.length > 0) {
-      query.tags = { $in: tags }
-    }
-
-    const sortOrder = order === 'asc' ? 1 : -1
+    // Execute query
     const skip = (page - 1) * limit
+    const sortOrder = order === 'asc' ? 1 : -1
 
     const [packages, total] = await Promise.all([
       Package.find(query)
@@ -409,14 +398,8 @@ const discoverPackage = async (req: Request, res: Response) => {
     ])
 
     return res.status(200).json({
-      message: 'Packages fetched successfully',
       data: packages,
-      meta: {
-        page,
-        limit,
-        total,
-        totalPages: Math.ceil(total / limit),
-      },
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
     })
   } catch (error) {
     logger.error(`Error fetching packages: ${error}`)
@@ -926,72 +909,42 @@ const likePackage = async(req: Request, res: Response) => {
   }
 } 
 
-const getLikedPackages = async(req: Request, res: Response) => {
+const getLikedPackages = async (req: Request, res: Response) => {
   if (!req.userId) {
     return res.status(401).json({ message: 'Unauthorized' })
   }
 
   try {
     const REDIS_CACHE_KEY = `packages:liked:${req.userId}`
-
+    
     const cached = await redis.get(REDIS_CACHE_KEY)
-
     if (cached) {
       logger.info('cache hit')
       return res.status(200).json(JSON.parse(cached))
     }
 
     const likedRecords = await LikedPackage.find({ userId: req.userId }).lean()
+    
+    const packageIds = [...new Set(
+      likedRecords
+        .map(record => record.packageId)
+        .filter(Boolean)
+    )]
 
-    if (likedRecords.length === 0) {
-      const response = {
-        message: 'No liked packages found',
-        data: [],
-      }
+    const packages = packageIds.length > 0
+      ? await Package.find({ _id: { $in: packageIds } })
+          .populate(packagePopulateConfig)
+          .sort({ updatedAt: -1 })
+      : []
 
-      await redis.set(REDIS_CACHE_KEY, JSON.stringify(response), 'EX', REDIS_TTL)
-
-      logger.info('cache miss')
-      return res.status(200).json(response)
-    }
-
-    const packageIds = [
-      ...new Set(
-        likedRecords
-          .map((record) => record.packageId)
-          .filter((id): id is string => Boolean(id && id.trim()))
-      ),
-    ]
-
-    if (packageIds.length === 0) {
-      const response = {
-        message: 'No valid liked package ids found',
-        data: [],
-      }
-
-      await redis.set(REDIS_CACHE_KEY, JSON.stringify(response), 'EX', REDIS_TTL)
-
-      logger.info('cache miss')
-      return res.status(200).json(response)
-    }
-
-    const likedPackages = await Package.find({ _id: { $in: packageIds } })
-      .populate(packagePopulateConfig)
-      .sort({ updatedAt: -1 })
-
-    const response = {
-      message: 'Liked packages fetched successfully',
-      data: likedPackages
-    }
+    const response = { data: packages }
 
     await redis.set(REDIS_CACHE_KEY, JSON.stringify(response), 'EX', REDIS_TTL)
-
     logger.info('cache miss')
+    
     return res.status(200).json(response)
-
   } catch (error) {
     logger.error(`Error fetching liked packages: ${error}`)
-
     return res.status(500).json({ message: 'Failed to get liked packages' })
   }
 }

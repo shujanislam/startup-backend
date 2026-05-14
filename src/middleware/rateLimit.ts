@@ -6,9 +6,9 @@ import logger from '../config/logger'
 
 const WINDOW_SEC = 60
 
-const MAX_PUBLIC = 60
+const MAX_PUBLIC = 120
 
-const MAX_PRIVATE = 120
+const MAX_PRIVATE = 240
 
 const getClientIp = (req: Request): string => {
   const forwarded = req.headers['x-forwarded-for']
