@@ -373,15 +373,17 @@ const discoverPackage = async (req: Request, res: Response) => {
 
     // Range filters
     if (minBudget !== undefined || maxBudget !== undefined) {
-      query.budget = {}
-      if (minBudget !== undefined) query.budget.$gte = minBudget
-      if (maxBudget !== undefined) query.budget.$lte = maxBudget
+      const budgetFilter: Record<string, number> = {}
+      if (minBudget !== undefined) budgetFilter.$gte = minBudget
+      if (maxBudget !== undefined) budgetFilter.$lte = maxBudget
+      query.budget = budgetFilter
     }
 
     if (minDuration !== undefined || maxDuration !== undefined) {
-      query.duration = {}
-      if (minDuration !== undefined) query.duration.$gte = minDuration
-      if (maxDuration !== undefined) query.duration.$lte = maxDuration
+      const durationFilter: Record<string, number> = {}
+      if (minDuration !== undefined) durationFilter.$gte = minDuration
+      if (maxDuration !== undefined) durationFilter.$lte = maxDuration
+      query.duration = durationFilter
     }
 
     // Execute query
