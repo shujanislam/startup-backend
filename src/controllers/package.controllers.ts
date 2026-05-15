@@ -578,6 +578,7 @@ const viewPackage = async (req: Request, res: Response) => {
 }
 
 const discoverPackage = async (req: Request, res: Response) => {
+  logger.info('discoverPackage endpoint called')
   const validation = validateSchema(sortPackageSchema, req.query)
   if (!validation.success) {
     return res.status(400).json({
@@ -585,7 +586,6 @@ const discoverPackage = async (req: Request, res: Response) => {
       errors: validation.errors,
     })
   }
-
   const {
     search,
     destination,
@@ -600,11 +600,10 @@ const discoverPackage = async (req: Request, res: Response) => {
     page,
     limit,
   } = validation.data
-
   try {
-    const query: Record<string, unknown> = { approved: true }
-
-    // Text search across multiple fields
+    const query: Record<string, unknown> = {
+      approved: true,
+    }
     if (search) {
       query.$or = [
         { name: { $regex: search, $options: 'i' } },
@@ -612,31 +611,29 @@ const discoverPackage = async (req: Request, res: Response) => {
         { destination: { $regex: search, $options: 'i' } },
       ]
     }
-
-    // Single field filters
-    if (destination) query.destination = { $regex: destination, $options: 'i' }
-    if (season) query.season = { $regex: season, $options: 'i' }
-    if (tags?.length) query.tags = { $in: tags }
-
-    // Range filters
+    if (destination) {
+      query.destination = { $regex: destination, $options: 'i' }
+    }
+    if (season) {
+      query.season = { $regex: season, $options: 'i' }
+    }
     if (minBudget !== undefined || maxBudget !== undefined) {
-      const budgetFilter: Record<string, number> = {}
-      if (minBudget !== undefined) budgetFilter.$gte = minBudget
-      if (maxBudget !== undefined) budgetFilter.$lte = maxBudget
-      query.budget = budgetFilter
+      query.budget = {
+        ...(minBudget !== undefined ? { $gte: minBudget } : {}),
+        ...(maxBudget !== undefined ? { $lte: maxBudget } : {}),
+      }
     }
-
     if (minDuration !== undefined || maxDuration !== undefined) {
-      const durationFilter: Record<string, number> = {}
-      if (minDuration !== undefined) durationFilter.$gte = minDuration
-      if (maxDuration !== undefined) durationFilter.$lte = maxDuration
-      query.duration = durationFilter
+      query.duration = {
+        ...(minDuration !== undefined ? { $gte: minDuration } : {}),
+        ...(maxDuration !== undefined ? { $lte: maxDuration } : {}),
+      }
     }
-
-    // Execute query
-    const skip = (page - 1) * limit
+    if (tags && tags.length > 0) {
+      query.tags = { $in: tags }
+    }
     const sortOrder = order === 'asc' ? 1 : -1
-
+    const skip = (page - 1) * limit
     const [packages, total] = await Promise.all([
       Package.find(query)
         .populate(packagePopulateConfig)
@@ -645,10 +642,15 @@ const discoverPackage = async (req: Request, res: Response) => {
         .limit(limit),
       Package.countDocuments(query),
     ])
-
     return res.status(200).json({
+      message: 'Packages fetched successfully',
       data: packages,
-      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
     })
   } catch (error) {
     logger.error(`Error fetching packages: ${error}`)
