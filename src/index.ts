@@ -1,6 +1,7 @@
 import 'dotenv/config'
 import cors from 'cors'
 import express from 'express'
+import path from 'node:path'
 import protectedRoutes from './routes/protected'
 import authRoutes from './routes/auth.routes'
 import { firebaseAuthMiddleware } from './middleware/firebaseAuth'
@@ -39,6 +40,9 @@ app.use(
   }),
 )
 app.use(express.json())
+
+// Serve uploaded images as static files
+app.use('/uploads', express.static(path.resolve(process.cwd(), 'uploads')))
 
 app.get('/', (_req, res) => {
   res.json({ message: 'Backend is running' })

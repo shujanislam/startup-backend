@@ -36,6 +36,10 @@ import { checkAdminRole } from '../utils/roleCheck'
 import { buildReviewEligibility } from '../utils/reviewEligibility'
 
 import { computeFeaturedPackageScore, getCurrentMonthKey } from '../utils/featuredPackage'
+import {
+  deleteOldPackageCoverImage,
+  isLocalPackageCoverImagePath,
+} from '../utils/uploadPackageCoverImage'
 
 const packagePopulateConfig: PopulateOptions[] = [
   { path: 'hotels', select: 'name phoneNumber address photos budget' },
@@ -895,6 +899,14 @@ const updateDraftPackage = async (req: Request, res: Response) => {
 
     const draftData = normalizeDraftPayload(validation.data)
 
+    const incomingCoverImage =
+      typeof draftData.coverImage === 'string' ? draftData.coverImage.trim() : undefined
+    const existingCoverImage = existingPackage.coverImage?.trim() || ''
+
+    if (incomingCoverImage !== undefined && incomingCoverImage !== existingCoverImage && existingCoverImage) {
+      deleteOldPackageCoverImage(existingCoverImage)
+    }
+
     const updatedPackage = await Package.findByIdAndUpdate(
       packageId,
       {
@@ -975,6 +987,15 @@ const submitPackageForApproval = async (req: Request, res: Response) => {
       vehicles: _vehicles,
       ...packageData
     } = validation.data
+
+    const incomingCoverImage =
+      typeof packageData.coverImage === 'string' ? packageData.coverImage.trim() : undefined
+    const existingCoverImage = existingPackage.coverImage?.trim() || ''
+
+    if (incomingCoverImage !== undefined && incomingCoverImage !== existingCoverImage && existingCoverImage) {
+      deleteOldPackageCoverImage(existingCoverImage)
+    }
+
     const relatedRecords = await createRelatedPackageRecords(validation.data, existingPackage.createdBy)
 
     const updatedPackage = await Package.findByIdAndUpdate(
@@ -1051,6 +1072,14 @@ const updatePackage = async (req: Request, res: Response) => {
 
     const shouldRequireReapproval =
       !isAdmin && getPackageStatus(existingPackage) === PACKAGE_STATUSES.approved
+
+    const incomingCoverImage =
+      typeof validation.data.coverImage === 'string' ? validation.data.coverImage.trim() : undefined
+    const existingCoverImage = existingPackage.coverImage?.trim() || ''
+
+    if (incomingCoverImage !== undefined && incomingCoverImage !== existingCoverImage && existingCoverImage) {
+      deleteOldPackageCoverImage(existingCoverImage)
+    }
 
     const updateData = {
       ...validation.data,
@@ -1319,6 +1348,11 @@ const deletePackage = async (req: Request, res: Response) => {
     }
 
     logger.info('Successfully deleted the package')
+
+    if (isLocalPackageCoverImagePath(existingPackage.coverImage || '')) {
+      deleteOldPackageCoverImage(existingPackage.coverImage)
+    }
+
     await clearPackageCaches(packageId, existingPackage.createdBy)
 
     return res.status(200).json({ message: 'Package deleted successfully' })

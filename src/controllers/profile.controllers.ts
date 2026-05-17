@@ -14,6 +14,8 @@ import UserPackageReveal from '../models/UserPackageReveal'
 
 import Package from '../models/Package'
 
+import uploadProfileImage, { getProfileImagePath, deleteOldProfileImage } from '../utils/uploadProfileImage'
+
 const REDIS_TTL = 3600
 
 const getProfiles = async (req: Request, res: Response) => {
@@ -96,34 +98,66 @@ const updateProfile = async (req: Request, res: Response) => {
     return res.status(403).json({ message: 'Forbidden: you can update only your profile' })
   }
 
-  const validation = validateSchema(updateUserSchema, req.body);
-  
-  if (!validation.success) {
-        return res.status(400).json({
-            message: 'Validation failed',
-            errors: validation.errors
-        })
+  try {
+    // Handle image upload if file is provided
+    let profileImagePath: string | null = null
+
+    if (req.file) {
+      profileImagePath = getProfileImagePath(req)
+      
+      if (!profileImagePath) {
+        return res.status(400).json({ message: 'Failed to process image upload' })
+      }
+
+      // Get current user to delete old image
+      const currentUser = await User.findById(profileId)
+      if (currentUser?.profileImagePath) {
+        deleteOldProfileImage(currentUser.profileImagePath)
+      }
     }
 
-    try {
-        const updatedProfile = await User.findByIdAndUpdate(
-            req.params.id,
-            validation.data,
-            { new: true, runValidators: true }
-        ).select('-password')
-
-        if (!updatedProfile) {
-            return res.status(404).json({ message: 'Profile not found' })
-        }
-
-        return res.status(200).json({
-            message: 'Profile updated successfully',
-            data: updatedProfile,
-        })
-    } catch (error) {
-        logger.error(`Error updating profile: ${error}`)
-        return res.status(500).json({ message: 'Failed to update profile' })
+    // Prepare update data
+    const updateData = {
+      ...req.body,
+      ...(profileImagePath && { profileImagePath }),
     }
+
+    // Validate the update data (excluding file field)
+    const validation = validateSchema(updateUserSchema, updateData)
+
+    if (!validation.success) {
+      return res.status(400).json({
+        message: 'Validation failed',
+        errors: validation.errors,
+      })
+    }
+
+    // Update the profile
+    const updatedProfile = await User.findByIdAndUpdate(
+      profileId,
+      validation.data,
+      { new: true, runValidators: true }
+    ).select('-password')
+
+    if (!updatedProfile) {
+      return res.status(404).json({ message: 'Profile not found' })
+    }
+
+    logger.info(`Profile updated successfully for user ${profileId}`)
+
+    // Invalidate Redis cache for this profile and profiles list
+    await redis.del(`profile:${profileId}`)
+    await redis.del('profiles:list')
+
+    return res.status(200).json({
+      message: 'Profile updated successfully',
+      data: updatedProfile,
+    })
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+    logger.error(`Error updating profile: ${errorMessage}`)
+    return res.status(500).json({ message: 'Failed to update profile' })
+  }
 }
 
 const deleteProfile = async (req: Request, res: Response) => {

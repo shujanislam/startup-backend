@@ -21,8 +21,27 @@ import {
   updatePackage,
 } from '../../controllers/package.controllers'
 
+import { uploadCoverImage } from '../../controllers/uploadController'
+import { handleMulterError } from '../../middleware/uploadHandler'
+import uploadPackageCoverImage from '../../utils/uploadPackageCoverImage'
+
 const privatePackageRoutes = Router()
 
+// Image upload endpoint
+privatePackageRoutes.post(
+  '/upload-cover-image',
+  (req, res, next) => {
+    uploadPackageCoverImage.single('coverImage')(req, res, (err) => {
+      if (err) {
+        return handleMulterError(err, req, res, next)
+      }
+      next()
+    })
+  },
+  uploadCoverImage
+)
+
+// Package management endpoints
 privatePackageRoutes.get('/my-draft-packages', getDraftPackages)
 privatePackageRoutes.get('/pending-packages', getPendingPackages)
 privatePackageRoutes.get('/package-details/:id', getPackageDetails)

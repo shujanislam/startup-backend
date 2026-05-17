@@ -25,7 +25,7 @@ export const updateUserSchema = z.object({
     email: z.string().email().optional(),
     password: z.string().min(8).optional(),
     gender: z.string().optional(),
-    profilePicture: z.string().optional(),
+    profileImagePath: z.string().optional(),
     bio: z.string().optional(),
     phone: z.string().optional(),
     travelStyle: z.string().optional(),
