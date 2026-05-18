@@ -21,9 +21,10 @@ import {
   updatePackage,
 } from '../../controllers/package.controllers'
 
-import { uploadCoverImage } from '../../controllers/uploadController'
+import { uploadCoverImage, uploadHotelPhoto } from '../../controllers/uploadController'
 import { handleMulterError } from '../../middleware/uploadHandler'
 import uploadPackageCoverImage from '../../utils/uploadPackageCoverImage'
+import uploadHotelPhotoMulter from '../../utils/uploadHotelPhoto'
 
 const privatePackageRoutes = Router()
 
@@ -39,6 +40,19 @@ privatePackageRoutes.post(
     })
   },
   uploadCoverImage
+)
+
+privatePackageRoutes.post(
+  '/upload-hotel-photo',
+  (req, res, next) => {
+    uploadHotelPhotoMulter.single('hotelPhoto')(req, res, (err) => {
+      if (err) {
+        return handleMulterError(err, req, res, next)
+      }
+      next()
+    })
+  },
+  uploadHotelPhoto
 )
 
 // Package management endpoints
