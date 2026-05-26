@@ -30,7 +30,7 @@ const configuredOrigins = (process.env.FRONTEND_ORIGIN || '')
   .map((origin) => origin.trim())
   .filter(Boolean)
 
-const devDefaultOrigins = ['http://localhost:5173', 'http://localhost:5175']
+const devDefaultOrigins = ['http://localhost:5173', 'http://localhost:5175', 'https://alpine-lemon-omega.vercel.app']
 const FRONTEND_ORIGINS = Array.from(new Set([...configuredOrigins, ...devDefaultOrigins]))
 
 app.use(
