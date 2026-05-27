@@ -793,8 +793,9 @@ const getDraftPackages = async (req: Request, res: Response) => {
       createdBy: req.userId,
       status: { $in: [PACKAGE_STATUSES.draft, PACKAGE_STATUSES.rejected] },
     })
-      .populate(packagePopulateConfig)
+      .select('_id name destination coverImage status updatedAt rejectionReason')
       .sort({ updatedAt: -1 })
+      .lean()
 
     return res.status(200).json({
       message: 'Draft packages fetched successfully',
