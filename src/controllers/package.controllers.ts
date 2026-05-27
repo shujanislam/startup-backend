@@ -509,6 +509,18 @@ const viewPackage = async (req: Request, res: Response) => {
   }
 
   try {
+    const resolveRevealMeta = async () => {
+      if (!req.userId) {
+        return { isRevealed: false }
+      }
+
+      const revealRecord = await UserPackageReveal.exists({
+        packageId,
+        userId: req.userId,
+      })
+
+      return { isRevealed: Boolean(revealRecord) }
+    }
     const REDIS_CACHE_KEY = `package:${packageId}`
 
     const cached = await redis.get(REDIS_CACHE_KEY)
@@ -529,13 +541,19 @@ const viewPackage = async (req: Request, res: Response) => {
           logger.error(`Failed to update package views for ${packageId}: ${error}`)
         })
 
-        return res.status(200).json(enrichedCachedPackage)
+        return res.status(200).json({
+          ...enrichedCachedPackage,
+          meta: await resolveRevealMeta(),
+        })
       }
 
       void Package.updateOne({ _id: packageId }, viewIncrement).catch((error) => {
         logger.error(`Failed to update package views for ${packageId}: ${error}`)
       })
-      return res.status(200).json(cachedPackage)
+      return res.status(200).json({
+        ...cachedPackage,
+        meta: await resolveRevealMeta(),
+      })
     }
 
     const packageData = await Package.findById(packageId).populate(packagePopulateConfig)
@@ -574,7 +592,10 @@ const viewPackage = async (req: Request, res: Response) => {
       logger.error(`Failed to update package views for ${packageId}: ${error}`)
     })
 
-    return res.status(200).json(packageResponse)
+    return res.status(200).json({
+      ...packageResponse,
+      meta: await resolveRevealMeta(),
+    })
   } catch (error) {
     logger.error(`Error fetching package ${packageId}: ${error}`)
     return res.status(500).json({ message: 'Failed to fetch package' })

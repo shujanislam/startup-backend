@@ -19,6 +19,7 @@ import {
   unapprovePackage,
   updateDraftPackage,
   updatePackage,
+  viewPackage,
 } from '../../controllers/package.controllers'
 
 import { uploadCoverImage, uploadHotelPhoto } from '../../controllers/uploadController'
@@ -58,6 +59,7 @@ privatePackageRoutes.post(
 // Package management endpoints
 privatePackageRoutes.get('/my-draft-packages', getDraftPackages)
 privatePackageRoutes.get('/pending-packages', getPendingPackages)
+privatePackageRoutes.get('/view-package/:id', viewPackage)
 privatePackageRoutes.get('/package-details/:id', getPackageDetails)
 privatePackageRoutes.get('/edit-package/:id', getEditablePackage)
 privatePackageRoutes.post('/draft-package', createDraftPackage)
