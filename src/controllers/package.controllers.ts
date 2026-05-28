@@ -48,6 +48,7 @@ const packagePopulateConfig: PopulateOptions[] = [
 
 const REVIEW_DELAY_DAYS = 3
 const REVIEW_DELAY_MS = REVIEW_DELAY_DAYS * 24 * 60 * 60 * 1000
+const PUBLIC_PACKAGE_SAFE_SELECT = '-hotels -vehicles -draftHotels -draftVehicles'
 
 const REDIS_TTL = 3600
 const FEATURED_REDIS_TTL = 900
@@ -336,7 +337,8 @@ const getPackages = async (req: Request, res: Response) => {
       return res.status(200).json(JSON.parse(cached))
     }
 
-    const packages = await Package.find(approvedPackageQuery).populate(packagePopulateConfig)
+    const packages = await Package.find(approvedPackageQuery)
+      .select(PUBLIC_PACKAGE_SAFE_SELECT)
 
     await redis.set(REDIS_CACHE_KEY, JSON.stringify(packages), 'EX', REDIS_TTL)
 
@@ -477,7 +479,8 @@ const getFeaturedPackage = async (_req: Request, res: Response) => {
       }
     }
 
-    const featuredPackage = await Package.findById(selected.id).populate(packagePopulateConfig)
+    const featuredPackage = await Package.findById(selected.id)
+      .select(PUBLIC_PACKAGE_SAFE_SELECT)
 
     if (!featuredPackage) {
       return res.status(404).json({ message: 'Featured package not found' })
@@ -498,8 +501,8 @@ const getFeaturedPackage = async (_req: Request, res: Response) => {
   }
 }
 
-const viewPackage = async (req: Request, res: Response) => { 
-  const packageId = req.params.id 
+const viewPackage = async (req: Request, res: Response) => {
+  const packageId = req.params.id
   const monthKey = getCurrentMonthKey()
   const viewIncrement = {
     $inc: {
@@ -509,92 +512,116 @@ const viewPackage = async (req: Request, res: Response) => {
   }
 
   try {
-    const resolveRevealMeta = async () => {
-      if (!req.userId) {
-        return { isRevealed: false }
+    if (!req.userId) {
+      return res.status(401).json({ message: 'Unauthorized' })
+    }
+
+    const roleCheck = await checkAdminRole(req.userId)
+    const isAdmin = roleCheck.ok
+
+    if (!isAdmin && roleCheck.status === 500) {
+      logger.error(`Admin role check failed for user ${req.userId}: ${roleCheck.message}`)
+    }
+
+    const buildAccessMeta = async (
+      packageData: Pick<IPackage, 'approved' | 'status' | 'createdBy'>,
+    ) => {
+      const isOwner = isPackageOwner(packageData, req.userId as string)
+      const isRevealed = Boolean(
+        await UserPackageReveal.exists({
+          packageId,
+          userId: req.userId,
+        }),
+      )
+
+      const canViewPackage =
+        getPackageStatus(packageData) === PACKAGE_STATUSES.approved ||
+        isOwner ||
+        isAdmin
+
+      const canViewSensitive = isOwner || isAdmin || isRevealed
+
+      return {
+        isRevealed,
+        canViewPackage,
+        canViewSensitive,
+      }
+    }
+
+    const sanitizePackageForViewer = (
+      packageData: Record<string, unknown>,
+      canViewSensitive: boolean,
+    ) => {
+      if (canViewSensitive) {
+        return packageData
       }
 
-      const revealRecord = await UserPackageReveal.exists({
-        packageId,
-        userId: req.userId,
-      })
+      const {
+        hotels: _hotels,
+        vehicles: _vehicles,
+        draftHotels: _draftHotels,
+        draftVehicles: _draftVehicles,
+        ...safePackageData
+      } = packageData
 
-      return { isRevealed: Boolean(revealRecord) }
+      return {
+        ...safePackageData,
+        hotels: [],
+        vehicles: [],
+      }
     }
-    const REDIS_CACHE_KEY = `package:${packageId}`
 
+    const REDIS_CACHE_KEY = `package:${packageId}`
     const cached = await redis.get(REDIS_CACHE_KEY)
 
-    if(cached){
-      const cachedPackage = JSON.parse(cached)
+    let packageData: Record<string, unknown>
 
-      if (!cachedPackage?.createdByName) {
-        const createdByName = await getUserNameByIdentifier(String(cachedPackage?.createdBy || ''))
-        const enrichedCachedPackage = {
-          ...cachedPackage,
-          createdByName,
-        }
+    if (cached) {
+      const parsed = JSON.parse(cached) as Record<string, unknown>
 
-        await redis.set(REDIS_CACHE_KEY, JSON.stringify(enrichedCachedPackage), 'EX', REDIS_TTL)
+      if (!parsed.createdByName) {
+        const createdByName = await getUserNameByIdentifier(String(parsed.createdBy || ''))
+        packageData = { ...parsed, createdByName }
+        await redis.set(REDIS_CACHE_KEY, JSON.stringify(packageData), 'EX', REDIS_TTL)
+      } else {
+        packageData = parsed
+      }
+    } else {
+      const dbPackage = await Package.findById(packageId).populate(packagePopulateConfig)
 
-        void Package.updateOne({ _id: packageId }, viewIncrement).catch((error) => {
-          logger.error(`Failed to update package views for ${packageId}: ${error}`)
-        })
-
-        return res.status(200).json({
-          ...enrichedCachedPackage,
-          meta: await resolveRevealMeta(),
-        })
+      if (!dbPackage) {
+        return res.status(404).json({ message: 'Package not found' })
       }
 
-      void Package.updateOne({ _id: packageId }, viewIncrement).catch((error) => {
-        logger.error(`Failed to update package views for ${packageId}: ${error}`)
-      })
-      return res.status(200).json({
-        ...cachedPackage,
-        meta: await resolveRevealMeta(),
-      })
+      const createdByName = await getUserNameByIdentifier(dbPackage.createdBy)
+      packageData = {
+        ...dbPackage.toObject(),
+        createdByName,
+      }
+
+      await redis.set(REDIS_CACHE_KEY, JSON.stringify(packageData), 'EX', REDIS_TTL)
     }
 
-    const packageData = await Package.findById(packageId).populate(packagePopulateConfig)
+    const accessMeta = await buildAccessMeta(
+      packageData as Pick<IPackage, 'approved' | 'status' | 'createdBy'>,
+    )
 
-    if (!packageData) {
+    if (!accessMeta.canViewPackage) {
       return res.status(404).json({ message: 'Package not found' })
     }
 
-    let isAdmin = false
-    if (req.userId) {
-      const roleCheck = await checkAdminRole(req.userId)
-      if (!roleCheck.ok && roleCheck.status === 500) {
-        logger.error(`Admin role check failed for user ${req.userId}: ${roleCheck.message}`)
-      }
-      isAdmin = roleCheck.ok
-    }
-    const canViewPackage =
-      getPackageStatus(packageData) === PACKAGE_STATUSES.approved ||
-      (req.userId ? isPackageOwner(packageData, req.userId) : false) ||
-      isAdmin
+    const resolvedId = String(packageData._id || packageId)
 
-    if (!canViewPackage) {
-      return res.status(404).json({ message: 'Package not found' })
-    }
-
-    const createdByName = await getUserNameByIdentifier(packageData.createdBy)
-
-    const packageResponse = {
-      ...packageData.toObject(),
-      createdByName,
-    }
-
-    await redis.set(REDIS_CACHE_KEY, JSON.stringify(packageResponse), 'EX', REDIS_TTL)
-
-    void Package.updateOne({ _id: packageData._id }, viewIncrement).catch((error) => {
-      logger.error(`Failed to update package views for ${packageId}: ${error}`)
+    void Package.updateOne({ _id: resolvedId }, viewIncrement).catch((error) => {
+      logger.error(`Failed to update package views for ${resolvedId}: ${error}`)
     })
 
     return res.status(200).json({
-      ...packageResponse,
-      meta: await resolveRevealMeta(),
+      ...sanitizePackageForViewer(packageData, accessMeta.canViewSensitive),
+      meta: {
+        isRevealed: accessMeta.isRevealed,
+        canViewSensitive: accessMeta.canViewSensitive,
+      },
     })
   } catch (error) {
     logger.error(`Error fetching package ${packageId}: ${error}`)
@@ -661,7 +688,7 @@ const discoverPackage = async (req: Request, res: Response) => {
     const skip = (page - 1) * limit
     const [packages, total] = await Promise.all([
       Package.find(query)
-        .populate(packagePopulateConfig)
+        .select(PUBLIC_PACKAGE_SAFE_SELECT)
         .sort({ [sortBy]: sortOrder })
         .skip(skip)
         .limit(limit),
@@ -1686,7 +1713,7 @@ const getLikedPackages = async (req: Request, res: Response) => {
 
     const packages = packageIds.length > 0
       ? await Package.find({ _id: { $in: packageIds } })
-          .populate(packagePopulateConfig)
+          .select(PUBLIC_PACKAGE_SAFE_SELECT)
           .sort({ updatedAt: -1 })
       : []
 
