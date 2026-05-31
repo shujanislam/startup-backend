@@ -257,7 +257,7 @@ const getCreatedPackages = async(req: Request, res: Response) => {
 
     if(!userExists) return res.status(404).json({ message: 'User not found' })
 
-    const createdPackages = await Package.find({ createdBy: userId })
+    const createdPackages = await Package.find({ createdBy: userId }).select('_id name coverImage season budget destination duration startDate endDate')
 
     const response = { createdPackages }
 

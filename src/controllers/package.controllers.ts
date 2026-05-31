@@ -1,24 +1,6 @@
 import { Request, Response } from 'express'
 
-import redis from '../config/redis'
-
 import logger from '../config/logger'
-
-import Package, { type IPackage, type PackageStatus } from '../models/Package' 
-
-import PackageReview from '../models/PackageReviews'
-
-import User from '../models/User'
-
-import UserPackageReveal from '../models/UserPackageReveal'
-
-import LikedPackage from '../models/LikedPackage'
-
-import Hotel from '../models/Hotel'
-
-import Vehicle from '../models/Vehicle'
-
-import type { PopulateOptions } from 'mongoose'
 
 import {
   createPackageSchema,
@@ -27,322 +9,15 @@ import {
   updatePackageSchema,
   createReviewSchema,
   sortPackageSchema,
-  type CreatePackageInput,
-  type DraftPackageInput,
 } from '../utils/validSchema'
 
-import { checkAdminRole } from '../utils/roleCheck'
-
-import { buildReviewEligibility } from '../utils/reviewEligibility'
-
-import { computeFeaturedPackageScore, getCurrentMonthKey } from '../utils/featuredPackage'
-import {
-  deleteOldPackageCoverImage,
-  isLocalPackageCoverImagePath,
-} from '../utils/uploadPackageCoverImage'
-
-const packagePopulateConfig: PopulateOptions[] = [
-  { path: 'hotels', select: 'name phoneNumber address photos budget' },
-  { path: 'vehicles', select: 'car carNumber driverName driverPhoneNumber vehicleType budget' },
-]
-
-const REVIEW_DELAY_DAYS = 3
-const REVIEW_DELAY_MS = REVIEW_DELAY_DAYS * 24 * 60 * 60 * 1000
-const PUBLIC_PACKAGE_SAFE_SELECT = '-hotels -vehicles -draftHotels -draftVehicles'
-
-const REDIS_TTL = 3600
-const FEATURED_REDIS_TTL = 900
-
-const toIdString = (value: unknown): string => {
-  if (typeof value === 'string') {
-    return value
-  }
-
-  if (value && typeof value === 'object' && 'toString' in value) {
-    return String(value)
-  }
-
-  return ''
-}
-
-const getMonthlyViewCount = (monthlyViews: unknown, monthKey: string): number => {
-  if (!monthlyViews) {
-    return 0
-  }
-
-  if (monthlyViews instanceof Map) {
-    return Number(monthlyViews.get(monthKey) || 0)
-  }
-
-  if (typeof monthlyViews === 'object') {
-    const record = monthlyViews as Record<string, unknown>
-    return Number(record[monthKey] || 0)
-  }
-
-  return 0
-}
-
-const isObjectIdString = (value: string): boolean => /^[a-f\d]{24}$/i.test(value)
-
-const getUserNameByIdentifier = async (identifier: string): Promise<string> => {
-  if (!identifier) {
-    return 'Anonymous'
-  }
-
-  const user = isObjectIdString(identifier)
-    ? await User.findById(identifier).select('name').lean()
-    : await User.findOne({ firebaseId: identifier }).select('name').lean()
-
-  return user?.name || 'Anonymous'
-}
-
-const PACKAGE_STATUSES = {
-  draft: 'draft',
-  pendingApproval: 'pending_approval',
-  approved: 'approved',
-  rejected: 'rejected',
-} as const
-
-const approvedPackageQuery = {
-  $or: [
-    { status: PACKAGE_STATUSES.approved },
-    { approved: true },
-  ],
-}
-
-const pendingPackageQuery = {
-  $or: [
-    { status: PACKAGE_STATUSES.pendingApproval },
-    { status: { $exists: false }, approved: false },
-  ],
-}
-
-type PackageStatusCandidate = {
-  status?: PackageStatus
-  approved: boolean
-  $isDefault?: (path?: string) => boolean
-}
-
-const getPackageStatus = (packageData: PackageStatusCandidate): PackageStatus => {
-  if (packageData.approved || packageData.status === PACKAGE_STATUSES.approved) {
-    return PACKAGE_STATUSES.approved
-  }
-
-  const statusWasDefaulted =
-    typeof packageData.$isDefault === 'function' && packageData.$isDefault('status')
-
-  if (packageData.status && !statusWasDefaulted) {
-    return packageData.status
-  }
-
-  return PACKAGE_STATUSES.pendingApproval
-}
-
-const normalizePackageStatusForResponse = <T extends PackageStatusCandidate | null>(packageData: T): T => {
-  if (!packageData) {
-    return packageData
-  }
-
-  const status = getPackageStatus(packageData)
-  packageData.status = status
-  packageData.approved = status === PACKAGE_STATUSES.approved
-
-  return packageData
-}
-
-const normalizePackageListForResponse = <T extends PackageStatusCandidate>(packages: T[]): T[] =>
-  packages.map((packageData) => normalizePackageStatusForResponse(packageData))
-
-const isPackageOwner = (packageData: Pick<IPackage, 'createdBy'>, userId: string) =>
-  String(packageData.createdBy) === userId
-
-const hasMeaningfulValue = (value: unknown): boolean => {
-  if (typeof value === 'string') {
-    return value.trim().length > 0
-  }
-
-  if (typeof value === 'number') {
-    return Number.isFinite(value) && value > 0
-  }
-
-  if (typeof value === 'boolean') {
-    return value
-  }
-
-  if (Array.isArray(value)) {
-    return value.some(hasMeaningfulValue)
-  }
-
-  if (value && typeof value === 'object') {
-    return Object.values(value).some(hasMeaningfulValue)
-  }
-
-  return false
-}
-
-const asCacheKeyPart = (value: unknown): string | undefined => {
-  if (Array.isArray(value)) {
-    return value[0] ? String(value[0]) : undefined
-  }
-
-  return value ? String(value) : undefined
-}
-
-const clearPackageCaches = async (packageId?: unknown, userId?: unknown) => {
-  const safePackageId = asCacheKeyPart(packageId)
-  const safeUserId = asCacheKeyPart(userId)
-  const keys = ['packages:list:approved:true']
-
-  if (safePackageId) {
-    keys.push(`package:${safePackageId}`, `package:${safePackageId}:reviews`)
-  }
-
-  if (safeUserId) {
-    keys.push(`packages:created:${safeUserId}`, `packages:liked:${safeUserId}`)
-  }
-
-  try {
-    await redis.del(...keys)
-  } catch (error) {
-    logger.error(`Failed to clear package cache: ${error}`)
-  }
-}
-
-const normalizeStringList = (items?: string[]) =>
-  (items ?? []).map((item) => item.trim()).filter(Boolean)
-
-const normalizeDraftHotels = (hotels?: DraftPackageInput['draftHotels']) =>
-  (hotels ?? [])
-    .filter(hasMeaningfulValue)
-    .map((hotel) => ({
-      name: hotel.name?.trim() ?? '',
-      phoneNumber: hotel.phoneNumber?.trim() ?? '',
-      address: hotel.address?.trim() ?? '',
-      photos: normalizeStringList(hotel.photos),
-      ...(hotel.budget !== undefined ? { budget: hotel.budget } : {}),
-    }))
-
-const normalizeDraftVehicles = (vehicles?: DraftPackageInput['draftVehicles']) =>
-  (vehicles ?? [])
-    .filter(hasMeaningfulValue)
-    .map((vehicle) => ({
-      car: vehicle.car?.trim() ?? '',
-      carNumber: vehicle.carNumber?.trim() ?? '',
-      driverName: vehicle.driverName?.trim() ?? '',
-      driverPhoneNumber: vehicle.driverPhoneNumber?.trim() ?? '',
-      vehicleType: vehicle.vehicleType?.trim() ?? '',
-      ...(vehicle.budget !== undefined ? { budget: vehicle.budget } : {}),
-    }))
-
-const normalizeDraftPayload = (data: DraftPackageInput) => ({
-  ...data,
-  ...(data.spots ? { spots: normalizeStringList(data.spots) } : {}),
-  ...(data.tags ? { tags: normalizeStringList(data.tags) } : {}),
-  ...(data.affiliateLinks ? { affiliateLinks: normalizeStringList(data.affiliateLinks) } : {}),
-  ...(data.draftHotels ? { draftHotels: normalizeDraftHotels(data.draftHotels) } : {}),
-  ...(data.draftVehicles ? { draftVehicles: normalizeDraftVehicles(data.draftVehicles) } : {}),
-})
-
-const normalizeObjectIdList = (items: unknown[] | undefined) =>
-  (items ?? [])
-    .map((item) => String(item))
-    .filter(Boolean)
-
-const buildSubmissionCandidate = (
-  existingPackage: IPackage,
-  incomingData: unknown,
-): Record<string, unknown> => {
-  const existing = existingPackage.toObject() as Record<string, unknown>
-  const incoming = incomingData && typeof incomingData === 'object'
-    ? incomingData as Record<string, unknown>
-    : {}
-
-  return {
-    name: existing.name,
-    description: existing.description,
-    coverImage: existing.coverImage,
-    season: existing.season,
-    budget: existing.budget,
-    destination: existing.destination,
-    spots: existing.spots,
-    duration: existing.duration,
-    startDate: existing.startDate,
-    endDate: existing.endDate,
-    identification: existing.identification,
-    permit: existing.permit,
-    tags: existing.tags,
-    affiliateLinks: existing.affiliateLinks,
-    additional: existing.additional,
-    hotels: normalizeObjectIdList(existing.hotels as unknown[] | undefined),
-    vehicles: normalizeObjectIdList(existing.vehicles as unknown[] | undefined),
-    draftHotels: existing.draftHotels,
-    draftVehicles: existing.draftVehicles,
-    ...incoming,
-  }
-}
-
-const createRelatedPackageRecords = async (
-  data: CreatePackageInput,
-  userId: string,
-): Promise<{ hotels: string[]; vehicles: string[] }> => {
-  const hotelIds = [...data.hotels]
-  const vehicleIds = [...data.vehicles]
-
-  if (data.draftHotels.length > 0) {
-    const createdHotels = await Hotel.insertMany(
-      data.draftHotels.map((hotel) => ({
-        ...hotel,
-        createdBy: userId,
-      })),
-    )
-
-    hotelIds.push(...createdHotels.map((hotel) => hotel._id.toString()))
-  }
-
-  if (data.draftVehicles.length > 0) {
-    const createdVehicles = await Vehicle.insertMany(
-      data.draftVehicles.map((vehicle) => ({
-        ...vehicle,
-        createdBy: userId,
-      })),
-    )
-
-    vehicleIds.push(...createdVehicles.map((vehicle) => vehicle._id.toString()))
-  }
-
-  return { hotels: hotelIds, vehicles: vehicleIds }
-}
-
-const canManagePackage = async (packageData: IPackage, userId: string) => {
-  const roleCheck = await checkAdminRole(userId)
-  const isAdmin = roleCheck.ok
-
-  if (!isAdmin && roleCheck.status === 500) {
-    logger.error(`Admin role check failed for user ${userId}: ${roleCheck.message}`)
-  }
-
-  return {
-    isAdmin,
-    isOwner: isPackageOwner(packageData, userId),
-  }
-}
+import * as packageService from '../services/package.service'
 
 const getPackages = async (req: Request, res: Response) => {
-  const REDIS_CACHE_KEY = 'packages:list:approved:true'
+  const page: number = Number(req.query.page) || 0
+
   try {
-    const cached = await redis.get(REDIS_CACHE_KEY)
-
-    if(cached) {
-      logger.info('cache hit')
-      return res.status(200).json(JSON.parse(cached))
-    }
-
-    const packages = await Package.find(approvedPackageQuery)
-      .select(PUBLIC_PACKAGE_SAFE_SELECT)
-
-    await redis.set(REDIS_CACHE_KEY, JSON.stringify(packages), 'EX', REDIS_TTL)
-
-    logger.info('cache miss')
+    const packages = await packageService.getApprovedPackages(page)
     return res.status(200).json(packages)
   } catch (error) {
     logger.error(`Error fetching package list: ${error}`)
@@ -351,150 +26,9 @@ const getPackages = async (req: Request, res: Response) => {
 }
 
 const getFeaturedPackage = async (_req: Request, res: Response) => {
-  const REDIS_CACHE_KEY = 'packages:featured:best'
-
   try {
-    const cached = await redis.get(REDIS_CACHE_KEY)
-
-    if (cached) {
-      logger.info('cache hit')
-      return res.status(200).json(JSON.parse(cached))
-    }
-
-    const now = new Date()
-    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
-    const monthKey = getCurrentMonthKey()
-
-    const approvedPackages = await Package.find({ approved: true }).lean()
-
-    if (approvedPackages.length === 0) {
-      return res.status(404).json({ message: 'No approved packages found' })
-    }
-
-    const packageIds = approvedPackages
-      .map((pkg) => toIdString(pkg._id))
-      .filter((id) => id.length > 0)
-
-    const likesLast7Days = await LikedPackage.aggregate([
-      { $match: { packageId: { $in: packageIds }, createdAt: { $gte: sevenDaysAgo } } },
-      { $group: { _id: '$packageId', count: { $sum: 1 } } },
-    ])
-
-    const likesAllTime = await LikedPackage.aggregate([
-      { $match: { packageId: { $in: packageIds } } },
-      { $group: { _id: '$packageId', count: { $sum: 1 } } },
-    ])
-
-    const reviewsLast7Days = await PackageReview.aggregate([
-      { $match: { packageId: { $in: packageIds }, createdAt: { $gte: sevenDaysAgo } } },
-      {
-        $group: {
-          _id: '$packageId',
-          avgRating: { $avg: '$rating' },
-          reviewCount: { $sum: 1 },
-        },
-      },
-    ])
-
-    const likesLast7DayMap = new Map(likesLast7Days.map((item) => [String(item._id), Number(item.count || 0)]))
-    const likesAllTimeMap = new Map(likesAllTime.map((item) => [String(item._id), Number(item.count || 0)]))
-    const reviewMap = new Map(
-      reviewsLast7Days.map((item) => [
-        String(item._id),
-        {
-          avgRating: Number(item.avgRating || 0),
-          reviewCount: Number(item.reviewCount || 0),
-        },
-      ]),
-    )
-
-    const packageMetrics = approvedPackages.map((pkg) => {
-      const id = toIdString(pkg._id)
-      const likes7d = likesLast7DayMap.get(id) || 0
-      const reviewStats = reviewMap.get(id)
-      const reviewCount7d = reviewStats?.reviewCount || 0
-
-      return {
-        packageDoc: pkg,
-        id,
-        monthlyViews: getMonthlyViewCount((pkg as { monthlyViews?: unknown }).monthlyViews, monthKey),
-        likes7d,
-        avgRating7d: reviewStats?.avgRating || 0,
-        reviewCount7d,
-        hasEngagement: likes7d > 0 || reviewCount7d > 0,
-      }
-    })
-
-    const scoredCandidates = packageMetrics.filter((item) => item.hasEngagement)
-
-    let selected = null as null | (typeof packageMetrics)[number]
-
-    if (scoredCandidates.length > 0) {
-      const maxMonthlyViews = scoredCandidates.reduce((max, item) => Math.max(max, item.monthlyViews), 0)
-      const maxLikes7d = scoredCandidates.reduce((max, item) => Math.max(max, item.likes7d), 0)
-
-      selected = scoredCandidates
-        .map((item) => ({
-          ...item,
-          score: computeFeaturedPackageScore(
-            {
-              monthlyViews: item.monthlyViews,
-              likesLast7Days: item.likes7d,
-              avgRatingLast7Days: item.avgRating7d,
-              reviewCountLast7Days: item.reviewCount7d,
-              createdAt: new Date(item.packageDoc.createdAt),
-            },
-            {
-              monthlyViews: maxMonthlyViews,
-              likesLast7Days: maxLikes7d,
-            },
-          ),
-        }))
-        .sort((a, b) => b.score - a.score)[0]
-    }
-
-    if (!selected) {
-      selected = [...packageMetrics]
-        .sort((a, b) => (b.likes7d - a.likes7d) || (b.monthlyViews - a.monthlyViews))[0]
-    }
-
-    if (!selected || selected.id.length === 0) {
-      return res.status(404).json({ message: 'No package available for featured slot' })
-    }
-
-    const selectedLikesAllTime = likesAllTimeMap.get(selected.id) || 0
-
-    if (selectedLikesAllTime === 0) {
-      const fallbackByAllTimeLikes = [...packageMetrics].sort((a, b) => {
-        const likeDiff = (likesAllTimeMap.get(b.id) || 0) - (likesAllTimeMap.get(a.id) || 0)
-        if (likeDiff !== 0) {
-          return likeDiff
-        }
-
-        return b.monthlyViews - a.monthlyViews
-      })[0]
-
-      if (fallbackByAllTimeLikes) {
-        selected = fallbackByAllTimeLikes
-      }
-    }
-
-    const featuredPackage = await Package.findById(selected.id)
-      .select(PUBLIC_PACKAGE_SAFE_SELECT)
-
-    if (!featuredPackage) {
-      return res.status(404).json({ message: 'Featured package not found' })
-    }
-
-    const response = {
-      message: 'Featured package fetched successfully',
-      data: featuredPackage,
-    }
-
-    await redis.set(REDIS_CACHE_KEY, JSON.stringify(response), 'EX', FEATURED_REDIS_TTL)
-
-    logger.info('cache miss')
-    return res.status(200).json(response)
+    const result = await packageService.getFeaturedPackage()
+    return res.status(result.status).json(result.body)
   } catch (error) {
     logger.error(`Error fetching featured package: ${error}`)
     return res.status(500).json({ message: 'Failed to fetch featured package' })
@@ -502,127 +36,15 @@ const getFeaturedPackage = async (_req: Request, res: Response) => {
 }
 
 const viewPackage = async (req: Request, res: Response) => {
-  const packageId = req.params.id
-  const monthKey = getCurrentMonthKey()
-  const viewIncrement = {
-    $inc: {
-      views: 1,
-      [`monthlyViews.${monthKey}`]: 1,
-    },
-  }
+  const packageId = String(req.params.id || '')
 
   try {
     if (!req.userId) {
       return res.status(401).json({ message: 'Unauthorized' })
     }
 
-    const roleCheck = await checkAdminRole(req.userId)
-    const isAdmin = roleCheck.ok
-
-    if (!isAdmin && roleCheck.status === 500) {
-      logger.error(`Admin role check failed for user ${req.userId}: ${roleCheck.message}`)
-    }
-
-    const buildAccessMeta = async (
-      packageData: Pick<IPackage, 'approved' | 'status' | 'createdBy'>,
-    ) => {
-      const isOwner = isPackageOwner(packageData, req.userId as string)
-      const isRevealed = Boolean(
-        await UserPackageReveal.exists({
-          packageId,
-          userId: req.userId,
-        }),
-      )
-
-      const canViewPackage =
-        getPackageStatus(packageData) === PACKAGE_STATUSES.approved ||
-        isOwner ||
-        isAdmin
-
-      const canViewSensitive = isOwner || isAdmin || isRevealed
-
-      return {
-        isRevealed,
-        canViewPackage,
-        canViewSensitive,
-      }
-    }
-
-    const sanitizePackageForViewer = (
-      packageData: Record<string, unknown>,
-      canViewSensitive: boolean,
-    ) => {
-      if (canViewSensitive) {
-        return packageData
-      }
-
-      const {
-        hotels: _hotels,
-        vehicles: _vehicles,
-        draftHotels: _draftHotels,
-        draftVehicles: _draftVehicles,
-        ...safePackageData
-      } = packageData
-
-      return {
-        ...safePackageData,
-        hotels: [],
-        vehicles: [],
-      }
-    }
-
-    const REDIS_CACHE_KEY = `package:${packageId}`
-    const cached = await redis.get(REDIS_CACHE_KEY)
-
-    let packageData: Record<string, unknown>
-
-    if (cached) {
-      const parsed = JSON.parse(cached) as Record<string, unknown>
-
-      if (!parsed.createdByName) {
-        const createdByName = await getUserNameByIdentifier(String(parsed.createdBy || ''))
-        packageData = { ...parsed, createdByName }
-        await redis.set(REDIS_CACHE_KEY, JSON.stringify(packageData), 'EX', REDIS_TTL)
-      } else {
-        packageData = parsed
-      }
-    } else {
-      const dbPackage = await Package.findById(packageId).populate(packagePopulateConfig)
-
-      if (!dbPackage) {
-        return res.status(404).json({ message: 'Package not found' })
-      }
-
-      const createdByName = await getUserNameByIdentifier(dbPackage.createdBy)
-      packageData = {
-        ...dbPackage.toObject(),
-        createdByName,
-      }
-
-      await redis.set(REDIS_CACHE_KEY, JSON.stringify(packageData), 'EX', REDIS_TTL)
-    }
-
-    const accessMeta = await buildAccessMeta(
-      packageData as Pick<IPackage, 'approved' | 'status' | 'createdBy'>,
-    )
-
-    if (!accessMeta.canViewPackage) {
-      return res.status(404).json({ message: 'Package not found' })
-    }
-
-    const resolvedId = String(packageData._id || packageId)
-
-    void Package.updateOne({ _id: resolvedId }, viewIncrement).catch((error) => {
-      logger.error(`Failed to update package views for ${resolvedId}: ${error}`)
-    })
-
-    return res.status(200).json({
-      ...sanitizePackageForViewer(packageData, accessMeta.canViewSensitive),
-      meta: {
-        isRevealed: accessMeta.isRevealed,
-        canViewSensitive: accessMeta.canViewSensitive,
-      },
-    })
+    const result = await packageService.viewPackage(packageId, req.userId)
+    return res.status(result.status).json(result.body)
   } catch (error) {
     logger.error(`Error fetching package ${packageId}: ${error}`)
     return res.status(500).json({ message: 'Failed to fetch package' })
@@ -653,57 +75,22 @@ const discoverPackage = async (req: Request, res: Response) => {
     limit,
   } = validation.data
   try {
-    const query: Record<string, unknown> = {
-      approved: true,
-    }
-    if (search) {
-      query.$or = [
-        { name: { $regex: search, $options: 'i' } },
-        { description: { $regex: search, $options: 'i' } },
-        { destination: { $regex: search, $options: 'i' } },
-      ]
-    }
-    if (destination) {
-      query.destination = { $regex: destination, $options: 'i' }
-    }
-    if (season) {
-      query.season = { $regex: season, $options: 'i' }
-    }
-    if (minBudget !== undefined || maxBudget !== undefined) {
-      query.budget = {
-        ...(minBudget !== undefined ? { $gte: minBudget } : {}),
-        ...(maxBudget !== undefined ? { $lte: maxBudget } : {}),
-      }
-    }
-    if (minDuration !== undefined || maxDuration !== undefined) {
-      query.duration = {
-        ...(minDuration !== undefined ? { $gte: minDuration } : {}),
-        ...(maxDuration !== undefined ? { $lte: maxDuration } : {}),
-      }
-    }
-    if (tags && tags.length > 0) {
-      query.tags = { $in: tags }
-    }
-    const sortOrder = order === 'asc' ? 1 : -1
-    const skip = (page - 1) * limit
-    const [packages, total] = await Promise.all([
-      Package.find(query)
-        .select(PUBLIC_PACKAGE_SAFE_SELECT)
-        .sort({ [sortBy]: sortOrder })
-        .skip(skip)
-        .limit(limit),
-      Package.countDocuments(query),
-    ])
-    return res.status(200).json({
-      message: 'Packages fetched successfully',
-      data: packages,
-      meta: {
-        page,
-        limit,
-        total,
-        totalPages: Math.ceil(total / limit),
-      },
+    const result = await packageService.discoverPackages({
+      search,
+      destination,
+      season,
+      minBudget,
+      maxBudget,
+      minDuration,
+      maxDuration,
+      tags,
+      sortBy,
+      order,
+      page,
+      limit,
     })
+
+    return res.status(200).json(result)
   } catch (error) {
     logger.error(`Error fetching packages: ${error}`)
     return res.status(500).json({ message: 'Failed to fetch packages' })
@@ -727,35 +114,11 @@ const postPackage = async (req: Request, res: Response) => {
   }
 
   try{
-    const {
-      draftHotels: _draftHotels,
-      draftVehicles: _draftVehicles,
-      hotels: _hotels,
-      vehicles: _vehicles,
-      ...packageData
-    } = validation.data
-    const relatedRecords = await createRelatedPackageRecords(validation.data, req.userId)
-
-    const createdPackage = await Package.create({
-      ...packageData,
-      ...relatedRecords,
-      createdBy: req.userId,
-      approved: false,
-      status: PACKAGE_STATUSES.pendingApproval,
-      submittedAt: new Date(),
-      reviewedAt: undefined,
-      reviewedBy: undefined,
-      rejectionReason: undefined,
-      draftHotels: [],
-      draftVehicles: [],
-    })
-
-    const populatedPackage = await Package.findById(createdPackage._id).populate(packagePopulateConfig)
-    await clearPackageCaches(createdPackage._id.toString(), req.userId)
+    const createdPackage = await packageService.createPackageForApproval(validation.data, req.userId)
 
     return res.status(201).json({
       message: "Package submitted for approval successfully",
-      data: populatedPackage ?? createdPackage,
+      data: createdPackage,
     })
   }catch(error){
     logger.error(`Error creating package: ${error}`)
@@ -779,31 +142,9 @@ const createDraftPackage = async (req: Request, res: Response) => {
     })
   }
 
-  const draftData = normalizeDraftPayload(validation.data)
-
-  if (!hasMeaningfulValue(draftData)) {
-    return res.status(400).json({ message: 'Add at least one package detail before saving a draft' })
-  }
-
   try {
-    const createdPackage = await Package.create({
-      ...draftData,
-      createdBy: req.userId,
-      approved: false,
-      status: PACKAGE_STATUSES.draft,
-      submittedAt: undefined,
-      reviewedAt: undefined,
-      reviewedBy: undefined,
-      rejectionReason: undefined,
-    })
-
-    const populatedPackage = await Package.findById(createdPackage._id).populate(packagePopulateConfig)
-    await clearPackageCaches(createdPackage._id.toString(), req.userId)
-
-    return res.status(201).json({
-      message: 'Draft package saved successfully',
-      data: populatedPackage ?? createdPackage,
-    })
+    const result = await packageService.createDraftPackage(validation.data, req.userId)
+    return res.status(result.status).json(result.body)
   } catch (error) {
     logger.error(`Error saving draft package: ${error}`)
     return res.status(500).json({ message: 'Failed to save draft package' })
@@ -816,18 +157,8 @@ const getDraftPackages = async (req: Request, res: Response) => {
   }
 
   try {
-    const packages = await Package.find({
-      createdBy: req.userId,
-      status: { $in: [PACKAGE_STATUSES.draft, PACKAGE_STATUSES.rejected] },
-    })
-      .select('_id name destination coverImage status updatedAt rejectionReason')
-      .sort({ updatedAt: -1 })
-      .lean()
-
-    return res.status(200).json({
-      message: 'Draft packages fetched successfully',
-      data: packages,
-    })
+    const response = await packageService.getDraftPackages(req.userId)
+    return res.status(200).json(response)
   } catch (error) {
     logger.error(`Error fetching draft packages: ${error}`)
     return res.status(500).json({ message: 'Failed to fetch draft packages' })
@@ -839,33 +170,15 @@ const getPackageDetails = async (req: Request, res: Response) => {
     return res.status(401).json({ message: 'Unauthorized' })
   }
 
-  const packageId = req.params.id
+  const packageId = String(req.params.id || '')
 
   if (!packageId) {
     return res.status(400).json({ message: 'Package id is required' })
   }
 
   try {
-    const packageData = await Package.findById(packageId).populate(packagePopulateConfig)
-
-    if (!packageData) {
-      return res.status(404).json({ message: 'Package not found' })
-    }
-
-    const { isAdmin, isOwner } = await canManagePackage(packageData, req.userId)
-    const canView =
-      getPackageStatus(packageData) === PACKAGE_STATUSES.approved ||
-      isOwner ||
-      isAdmin
-
-    if (!canView) {
-      return res.status(404).json({ message: 'Package not found' })
-    }
-
-    return res.status(200).json({
-      message: 'Package details fetched successfully',
-      data: packageData,
-    })
+    const result = await packageService.getPackageDetails(packageId, req.userId)
+    return res.status(result.status).json(result.body)
   } catch (error) {
     logger.error(`Error fetching package details: ${error}`)
     return res.status(500).json({ message: 'Failed to fetch package details' })
@@ -877,29 +190,15 @@ const getEditablePackage = async (req: Request, res: Response) => {
     return res.status(401).json({ message: 'Unauthorized' })
   }
 
-  const packageId = req.params.id
+  const packageId = String(req.params.id || '')
 
   if (!packageId) {
     return res.status(400).json({ message: 'Package id is required' })
   }
 
   try {
-    const packageData = await Package.findById(packageId).populate(packagePopulateConfig)
-
-    if (!packageData) {
-      return res.status(404).json({ message: 'Package not found' })
-    }
-
-    const { isAdmin, isOwner } = await canManagePackage(packageData, req.userId)
-
-    if (!isOwner && !isAdmin) {
-      return res.status(403).json({ message: 'Forbidden: you cannot edit this package' })
-    }
-
-    return res.status(200).json({
-      message: 'Editable package fetched successfully',
-      data: packageData,
-    })
+    const result = await packageService.getEditablePackage(packageId, req.userId)
+    return res.status(result.status).json(result.body)
   } catch (error) {
     logger.error(`Error fetching editable package: ${error}`)
     return res.status(500).json({ message: 'Failed to fetch editable package' })
@@ -907,7 +206,7 @@ const getEditablePackage = async (req: Request, res: Response) => {
 }
 
 const updateDraftPackage = async (req: Request, res: Response) => {
-  const packageId = req.params.id
+  const packageId = String(req.params.id || '')
   logger.info(`updateDraftPackage endpoint called for id: ${packageId || 'not provided'}`)
 
   if (!req.userId) {
@@ -928,58 +227,8 @@ const updateDraftPackage = async (req: Request, res: Response) => {
   }
 
   try {
-    const existingPackage = await Package.findById(packageId)
-
-    if (!existingPackage) {
-      return res.status(404).json({ message: 'Package not found' })
-    }
-
-    const { isAdmin, isOwner } = await canManagePackage(existingPackage, req.userId)
-
-    if (!isOwner && !isAdmin) {
-      return res.status(403).json({ message: 'Forbidden: you cannot update this draft' })
-    }
-
-    const existingStatus = getPackageStatus(existingPackage)
-
-    if (existingStatus !== PACKAGE_STATUSES.draft && existingStatus !== PACKAGE_STATUSES.rejected) {
-      return res.status(409).json({ message: 'Only draft or rejected packages can be edited as drafts' })
-    }
-
-    const draftData = normalizeDraftPayload(validation.data)
-
-    const incomingCoverImage =
-      typeof draftData.coverImage === 'string' ? draftData.coverImage.trim() : undefined
-    const existingCoverImage = existingPackage.coverImage?.trim() || ''
-
-    if (incomingCoverImage !== undefined && incomingCoverImage !== existingCoverImage && existingCoverImage) {
-      deleteOldPackageCoverImage(existingCoverImage)
-    }
-
-    const updatedPackage = await Package.findByIdAndUpdate(
-      packageId,
-      {
-        ...draftData,
-        approved: false,
-        status: PACKAGE_STATUSES.draft,
-        submittedAt: undefined,
-        reviewedAt: undefined,
-        reviewedBy: undefined,
-        rejectionReason: undefined,
-      },
-      { new: true, runValidators: true },
-    ).populate(packagePopulateConfig)
-
-    if (!updatedPackage) {
-      return res.status(404).json({ message: 'Package not found' })
-    }
-
-    await clearPackageCaches(packageId, existingPackage.createdBy)
-
-    return res.status(200).json({
-      message: 'Draft package updated successfully',
-      data: normalizePackageStatusForResponse(updatedPackage),
-    })
+    const result = await packageService.updateDraftPackage(packageId, validation.data, req.userId)
+    return res.status(result.status).json(result.body)
   } catch (error) {
     logger.error(`Error updating draft package: ${error}`)
     return res.status(500).json({ message: 'Failed to update draft package' })
@@ -987,7 +236,7 @@ const updateDraftPackage = async (req: Request, res: Response) => {
 }
 
 const submitPackageForApproval = async (req: Request, res: Response) => {
-  const packageId = req.params.id
+  const packageId = String(req.params.id || '')
   logger.info(`submitPackageForApproval endpoint called for id: ${packageId || 'not provided'}`)
 
   if (!req.userId) {
@@ -999,81 +248,8 @@ const submitPackageForApproval = async (req: Request, res: Response) => {
   }
 
   try {
-    const existingPackage = await Package.findById(packageId)
-
-    if (!existingPackage) {
-      return res.status(404).json({ message: 'Package not found' })
-    }
-
-    const { isAdmin, isOwner } = await canManagePackage(existingPackage, req.userId)
-
-    if (!isOwner && !isAdmin) {
-      return res.status(403).json({ message: 'Forbidden: you cannot submit this package' })
-    }
-
-    const existingStatus = getPackageStatus(existingPackage)
-
-    if (existingStatus !== PACKAGE_STATUSES.draft && existingStatus !== PACKAGE_STATUSES.rejected) {
-      return res.status(409).json({ message: 'Only draft or rejected packages can be submitted for approval' })
-    }
-
-    const validation = validateSchema(
-      createPackageSchema,
-      buildSubmissionCandidate(existingPackage, req.body),
-    )
-
-    if (!validation.success) {
-      return res.status(400).json({
-        message: 'Validation failed',
-        errors: validation.errors,
-      })
-    }
-
-    const {
-      draftHotels: _draftHotels,
-      draftVehicles: _draftVehicles,
-      hotels: _hotels,
-      vehicles: _vehicles,
-      ...packageData
-    } = validation.data
-
-    const incomingCoverImage =
-      typeof packageData.coverImage === 'string' ? packageData.coverImage.trim() : undefined
-    const existingCoverImage = existingPackage.coverImage?.trim() || ''
-
-    if (incomingCoverImage !== undefined && incomingCoverImage !== existingCoverImage && existingCoverImage) {
-      deleteOldPackageCoverImage(existingCoverImage)
-    }
-
-    const relatedRecords = await createRelatedPackageRecords(validation.data, existingPackage.createdBy)
-
-    const updatedPackage = await Package.findByIdAndUpdate(
-      packageId,
-      {
-        ...packageData,
-        ...relatedRecords,
-        approved: false,
-        status: PACKAGE_STATUSES.pendingApproval,
-        submittedAt: new Date(),
-        reviewedAt: undefined,
-        reviewedBy: undefined,
-        rejectionReason: undefined,
-        draftHotels: [],
-        draftVehicles: [],
-      },
-      { new: true, runValidators: true },
-    ).populate(packagePopulateConfig)
-
-    if (!updatedPackage) {
-      return res.status(404).json({ message: 'Package not found' })
-    }
-
-    await clearPackageCaches(packageId, existingPackage.createdBy)
-
-    return res.status(200).json({
-      message: 'Package submitted for approval successfully',
-      data: normalizePackageStatusForResponse(updatedPackage),
-    })
+    const result = await packageService.submitPackageForApproval(packageId, req.body, req.userId)
+    return res.status(result.status).json(result.body)
   } catch (error) {
     logger.error(`Error submitting package for approval: ${error}`)
     return res.status(500).json({ message: 'Failed to submit package for approval' })
@@ -1081,7 +257,7 @@ const submitPackageForApproval = async (req: Request, res: Response) => {
 }
 
 const updatePackage = async (req: Request, res: Response) => {
-  const packageId = req.params.id
+  const packageId = String(req.params.id || '')
   logger.info(`updatePackage endpoint called for id: ${packageId || 'not provided'}`)
 
   if (!req.userId) {
@@ -1107,62 +283,8 @@ const updatePackage = async (req: Request, res: Response) => {
   }
 
   try {
-    const existingPackage = await Package.findById(packageId)
-
-    if (!existingPackage) {
-      return res.status(404).json({ message: 'Package not found' })
-    }
-
-    const { isAdmin, isOwner } = await canManagePackage(existingPackage, req.userId)
-
-    if (!isOwner && !isAdmin) {
-      return res.status(403).json({ message: 'Forbidden: you cannot update this package' })
-    }
-
-    const shouldRequireReapproval =
-      !isAdmin && getPackageStatus(existingPackage) === PACKAGE_STATUSES.approved
-
-    const incomingCoverImage =
-      typeof validation.data.coverImage === 'string' ? validation.data.coverImage.trim() : undefined
-    const existingCoverImage = existingPackage.coverImage?.trim() || ''
-
-    if (incomingCoverImage !== undefined && incomingCoverImage !== existingCoverImage && existingCoverImage) {
-      deleteOldPackageCoverImage(existingCoverImage)
-    }
-
-    const updateData = {
-      ...validation.data,
-      ...(shouldRequireReapproval
-        ? {
-            approved: false,
-            status: PACKAGE_STATUSES.pendingApproval,
-            submittedAt: new Date(),
-            reviewedAt: undefined,
-            reviewedBy: undefined,
-            rejectionReason: undefined,
-          }
-        : {}),
-    }
-
-    const updatedPackage = await Package.findByIdAndUpdate(
-      packageId,
-      updateData,
-      { new: true, runValidators: true }
-    ).populate(packagePopulateConfig)
-
-    if (!updatedPackage) {
-      return res.status(404).json({ message: 'Package not found' })
-    }
-
-    await clearPackageCaches(packageId, existingPackage.createdBy)
-
-    return res.status(200).json({
-      message:
-        shouldRequireReapproval
-          ? 'Package updated successfully and requires re-approval'
-          : 'Package updated successfully',
-      data: normalizePackageStatusForResponse(updatedPackage),
-    })
+    const result = await packageService.updatePackage(packageId, validation.data, req.userId)
+    return res.status(result.status).json(result.body)
   } catch (error) {
     logger.error(`Error updating package: ${error}`)
     return res.status(500).json({ message: 'Failed to update package' })
@@ -1185,51 +307,8 @@ const postPackageReview = async (req: Request, res: Response) => {
   }
 
   try {
-    const { packageId, review, rating } = validation.data
-
-    const existingPackage = await Package.findById(packageId)
-    if (!existingPackage) {
-      return res.status(404).json({ message: 'Package not found' })
-    }
-
-    if (getPackageStatus(existingPackage) !== PACKAGE_STATUSES.approved) {
-      return res.status(403).json({ message: 'Only approved packages can be reviewed' })
-    }
-
-    const revealRecord = await UserPackageReveal.findOne({
-      packageId,
-      userId: req.userId,
-    })
-      .select('createdAt')
-      .lean()
-
-    const eligibility = buildReviewEligibility(revealRecord)
-
-    if (!eligibility.revealed) {
-      return res.status(403).json({ message: 'Unlock the trip before posting a review' })
-    }
-
-    if (!eligibility.canReview) {
-      return res.status(403).json({
-        message: `Reviews unlock ${REVIEW_DELAY_DAYS} days after unlocking`,
-        data: {
-          reviewAvailableAt: eligibility.reviewAvailableAt?.toISOString() ?? null,
-          daysRemaining: eligibility.daysRemaining,
-        },
-      })
-    }
-
-    const createdReview = await PackageReview.create({
-      packageId,
-      userId: req.userId,
-      review,
-      rating,
-    })
-
-    return res.status(201).json({
-      message: 'Package review created successfully',
-      data: createdReview,
-    })
+    const result = await packageService.createPackageReview(validation.data, req.userId)
+    return res.status(result.status).json(result.body)
   } catch (error) {
     logger.error(`Error creating package review: ${error}`)
     return res.status(500).json({ message: 'Failed to create package review' })
@@ -1241,41 +320,15 @@ const getReviewEligibility = async (req: Request, res: Response) => {
     return res.status(401).json({ message: 'Unauthorized' })
   }
 
-  const packageId = req.params.id
+  const packageId = String(req.params.id || '')
 
   if (!packageId) {
     return res.status(400).json({ message: 'Package id is required' })
   }
 
   try {
-    const packageExists = await Package.exists({ _id: packageId })
-
-    if (!packageExists) {
-      return res.status(404).json({ message: 'Package not found' })
-    }
-
-    const revealRecord = await UserPackageReveal.findOne({
-      packageId,
-      userId: req.userId,
-    })
-      .select('createdAt')
-      .lean()
-
-    const eligibility = buildReviewEligibility(revealRecord)
-
-    return res.status(200).json({
-      message: 'Review eligibility fetched successfully',
-      data: {
-        revealed: eligibility.revealed,
-        revealedAt: eligibility.revealedAt ? eligibility.revealedAt.toISOString() : null,
-        canReview: eligibility.canReview,
-        reviewAvailableAt: eligibility.reviewAvailableAt
-          ? eligibility.reviewAvailableAt.toISOString()
-          : null,
-        daysRemaining: eligibility.daysRemaining,
-        status: eligibility.status,
-      },
-    })
+    const result = await packageService.getReviewEligibility(packageId, req.userId)
+    return res.status(result.status).json(result.body)
   } catch (error) {
     logger.error(`Error fetching review eligibility for package ${packageId}: ${error}`)
     return res.status(500).json({ message: 'Failed to fetch review eligibility' })
@@ -1283,78 +336,15 @@ const getReviewEligibility = async (req: Request, res: Response) => {
 }
 
 const getPackageReviews = async (req: Request, res: Response) => {
-  const packageId = req.params.id
+  const packageId = String(req.params.id || '')
 
   if (!packageId) {
     return res.status(400).json({ message: 'Package id is required' })
   }
 
   try {
-    const REDIS_CACHE_KEY = `package:${packageId}:reviews`
-
-    const cached = await redis.get(REDIS_CACHE_KEY)
-
-    if (cached) {
-      logger.info('cache hit')
-      return res.status(200).json(JSON.parse(cached))
-    }
-
-    const existingPackage = await Package.findById(packageId)
-    if (!existingPackage) {
-      return res.status(404).json({ message: 'Package not found' })
-    }
-
-    if (getPackageStatus(existingPackage) !== PACKAGE_STATUSES.approved) {
-      return res.status(404).json({ message: 'Package not found' })
-    }
-
-    const reviews = await PackageReview.find({ packageId })
-      .sort({ createdAt: -1 })
-      .lean()
-
-    const userIds = [...new Set(reviews.map((r) => String(r.userId || '')).filter((id) => id.length > 0))]
-    const objectIdUserIds = userIds.filter(isObjectIdString)
-
-    const userFilters: Array<Record<string, unknown>> = []
-
-    if (objectIdUserIds.length > 0) {
-      userFilters.push({ _id: { $in: objectIdUserIds } })
-    }
-
-    if (userIds.length > 0) {
-      userFilters.push({ firebaseId: { $in: userIds } })
-    }
-
-    const users = userFilters.length > 0
-      ? await User.find({ $or: userFilters }).select('_id firebaseId name profilePicture').lean()
-      : []
-
-    const userMap = new Map<string, { name?: string; profilePicture?: string }>()
-    for (const user of users) {
-      if (user.firebaseId) {
-        userMap.set(user.firebaseId, user)
-      }
-      userMap.set(String(user._id), user)
-    }
-
-    const enrichedReviews = reviews.map((r) => {
-      const reviewer = userMap.get(String(r.userId))
-      return {
-        ...r,
-        userName: reviewer?.name ?? 'Anonymous',
-        userPicture: reviewer?.profilePicture ?? '',
-      }
-    })
-
-    const response = {
-      message: 'Reviews fetched successfully',
-      data: enrichedReviews,
-    }
-
-    await redis.set(REDIS_CACHE_KEY, JSON.stringify(response), 'EX', REDIS_TTL)
-
-    logger.info('cache miss')
-    return res.status(200).json(response)
+    const result = await packageService.getPackageReviews(packageId)
+    return res.status(result.status).json(result.body)
   } catch (error) {
     logger.error(`Error fetching reviews for package ${packageId}: ${error}`)
     return res.status(500).json({ message: 'Failed to fetch reviews' })
@@ -1368,43 +358,11 @@ const deletePackage = async (req: Request, res: Response) => {
     return res.status(401).json({ message: 'Unauthorized' })
   }
   
-  const packageId = req.params.id
+  const packageId = String(req.params.id || '')
 
   try {
-    const existingPackage = await Package.findById(packageId)
-    
-    if (!existingPackage) {
-      return res.status(404).json({ message: 'Package not found' })
-    }
-
-    const { isAdmin, isOwner } = await canManagePackage(existingPackage, req.userId)
-
-    if (!isOwner && !isAdmin) {
-      return res.status(403).json({ message: 'Forbidden: you cannot delete this package' })
-    }
-
-    if (getPackageStatus(existingPackage) === PACKAGE_STATUSES.approved && !isAdmin) {
-      return res
-        .status(403)
-        .json({ message: 'Approved packages can only be deleted by an admin' })
-    }
-
-    const deletedPackage = await Package.findByIdAndDelete(packageId)
-
-    if (!deletedPackage) {
-      logger.info('Error while deleting the package')
-      return res.status(404).json({ message: 'Package not found' })
-    }
-
-    logger.info('Successfully deleted the package')
-
-    if (isLocalPackageCoverImagePath(existingPackage.coverImage || '')) {
-      deleteOldPackageCoverImage(existingPackage.coverImage)
-    }
-
-    await clearPackageCaches(packageId, existingPackage.createdBy)
-
-    return res.status(200).json({ message: 'Package deleted successfully' })
+    const result = await packageService.deletePackage(packageId, req.userId)
+    return res.status(result.status).json(result.body)
   } catch (error) {
     logger.error(`Error deleting package: ${error}`)
     return res.status(500).json({ message: 'Failed to delete package' })
@@ -1417,19 +375,8 @@ const getPendingPackages = async (req: Request, res: Response) => {
   }
 
   try {
-    const roleCheck = await checkAdminRole(req.userId)
-
-    if (!roleCheck.ok) {
-      return res.status(roleCheck.status).json({ message: roleCheck.message })
-    }
-
-    const packages = normalizePackageListForResponse(
-      await Package.find(pendingPackageQuery)
-        .populate(packagePopulateConfig)
-        .sort({ createdAt: -1 })
-    )
-
-    return res.status(200).json(packages)
+    const result = await packageService.getPendingPackages(req.userId)
+    return res.status(result.status).json(result.body)
   } catch (error) {
     logger.error(`Error fetching pending packages: ${error}`)
     return res.status(500).json({ message: 'Failed to fetch pending packages' })
@@ -1442,50 +389,8 @@ const approvePackage = async(req: Request, res: Response) => {
   }
 
   try {
-    const roleCheck = await checkAdminRole(req.userId)
-
-    if (!roleCheck.ok) {
-      return res.status(roleCheck.status).json({ message: roleCheck.message })
-    }
-
-    const existingPackage = await Package.findById(req.params.id)
-
-    if (!existingPackage) {
-      return res.status(404).json({ message: 'Package not found' })
-    }
-
-    const currentStatus = getPackageStatus(existingPackage)
-
-    if (currentStatus === PACKAGE_STATUSES.draft) {
-      return res.status(400).json({ message: 'Draft packages must be submitted before approval' })
-    }
-
-    if (currentStatus === PACKAGE_STATUSES.rejected) {
-      return res.status(400).json({ message: 'Rejected packages must be resubmitted before approval' })
-    }
-
-    const approvedPackage = await Package.findByIdAndUpdate(
-      req.params.id,
-      {
-        approved: true,
-        status: PACKAGE_STATUSES.approved,
-        reviewedAt: new Date(),
-        reviewedBy: req.userId,
-        rejectionReason: undefined,
-      },
-      { new: true, runValidators: true }
-    ).populate(packagePopulateConfig)
-
-    if (!approvedPackage) {
-      return res.status(404).json({ message: 'Package not found' })
-    }
-
-    await clearPackageCaches(req.params.id, existingPackage.createdBy)
-
-    return res.status(200).json({
-      message: 'Package approved successfully',
-      data: normalizePackageStatusForResponse(approvedPackage),
-    })
+    const result = await packageService.approvePackage(String(req.params.id || ''), req.userId)
+    return res.status(result.status).json(result.body)
   } catch (error) {
     logger.error(`Error approving package: ${error}`)
     return res.status(500).json({ message: 'Failed to approve package' })
@@ -1498,41 +403,8 @@ const unapprovePackage = async(req: Request, res: Response) => {
   }
 
   try {
-    const roleCheck = await checkAdminRole(req.userId)
-
-    if (!roleCheck.ok) {
-      return res.status(roleCheck.status).json({ message: roleCheck.message })
-    }
-
-    const existingPackage = await Package.findById(req.params.id)
-
-    if (!existingPackage) {
-      return res.status(404).json({ message: 'Package not found' })
-    }
-
-    const unapprovedPackage = await Package.findByIdAndUpdate(
-      req.params.id,
-      {
-        approved: false,
-        status: PACKAGE_STATUSES.pendingApproval,
-        submittedAt: new Date(),
-        reviewedAt: new Date(),
-        reviewedBy: req.userId,
-        rejectionReason: undefined,
-      },
-      { new: true, runValidators: true }
-    ).populate(packagePopulateConfig)
-
-    if (!unapprovedPackage) {
-      return res.status(404).json({ message: 'Package not found' })
-    }
-
-    await clearPackageCaches(req.params.id, existingPackage.createdBy)
-
-    return res.status(200).json({
-      message: 'Package moved back to pending approval successfully',
-      data: normalizePackageStatusForResponse(unapprovedPackage),
-    })
+    const result = await packageService.unapprovePackage(String(req.params.id || ''), req.userId)
+    return res.status(result.status).json(result.body)
   } catch (error) {
     logger.error(`Error unapproving package: ${error}`)
     return res.status(500).json({ message: 'Failed to unapprove package' })
@@ -1545,50 +417,12 @@ const rejectPackage = async(req: Request, res: Response) => {
   }
 
   try {
-    const roleCheck = await checkAdminRole(req.userId)
-
-    if (!roleCheck.ok) {
-      return res.status(roleCheck.status).json({ message: roleCheck.message })
-    }
-
-    const packageId = req.params.id
-    const existingPackage = await Package.findById(packageId)
-
-    if (!existingPackage) {
-      return res.status(404).json({ message: 'Package not found' })
-    }
-
-    if (getPackageStatus(existingPackage) !== PACKAGE_STATUSES.pendingApproval) {
-      return res.status(400).json({ message: 'Only pending packages can be rejected' })
-    }
-
     const rejectionReason =
       typeof req.body?.reason === 'string' && req.body.reason.trim()
         ? req.body.reason.trim()
         : undefined
-
-    const rejectedPackage = await Package.findByIdAndUpdate(
-      packageId,
-      {
-        approved: false,
-        status: PACKAGE_STATUSES.rejected,
-        reviewedAt: new Date(),
-        reviewedBy: req.userId,
-        rejectionReason,
-      },
-      { new: true, runValidators: true },
-    ).populate(packagePopulateConfig)
-
-    if (!rejectedPackage) {
-      return res.status(404).json({ message: 'Package not found' })
-    }
-
-    await clearPackageCaches(packageId, existingPackage.createdBy)
-
-    return res.status(200).json({
-      message: 'Package rejected successfully',
-      data: normalizePackageStatusForResponse(rejectedPackage),
-    })
+    const result = await packageService.rejectPackage(String(req.params.id || ''), req.userId, rejectionReason)
+    return res.status(result.status).json(result.body)
   } catch (error) {
     logger.error(`Error rejecting package: ${error}`)
     return res.status(500).json({ message: 'Failed to reject package' })
@@ -1599,41 +433,14 @@ const revealPackage = async(req: Request, res: Response) => {
   if(!req.userId) return res.status(401).json({ message: 'Unauthorized' })
 
   try{
-    const packageId = req.params.id
+    const packageId = String(req.params.id || '')
 
     if (!packageId) {
       return res.status(400).json({ message: 'Package id is required' })
     }
 
-    const existingPackage = await Package.findById(packageId)
-
-    if(!existingPackage) return res.status(404).json({ message: 'Package not found' })
-
-    if (getPackageStatus(existingPackage) !== PACKAGE_STATUSES.approved) {
-      return res.status(403).json({ message: 'Only approved packages can be revealed' })
-    }
-
-    const alreadyRevealed = await UserPackageReveal.findOne({
-      packageId,
-      userId: req.userId,
-    })
-
-    if (alreadyRevealed) {
-      return res.status(200).json({
-        message: 'Package already revealed',
-        data: normalizePackageStatusForResponse(existingPackage),
-      })
-    }
-
-    await UserPackageReveal.create({
-      packageId,
-      userId: req.userId,
-    })
-
-    return res.status(200).json({
-      message: 'Package revealed successfully',
-      data: normalizePackageStatusForResponse(existingPackage),
-    })
+    const result = await packageService.revealPackage(packageId, req.userId)
+    return res.status(result.status).json(result.body)
   }
   catch(err: any){
     logger.error(err.message)
@@ -1645,43 +452,14 @@ const likePackage = async(req: Request, res: Response) => {
   if(!req.userId) return res.status(401).json({ message: 'Unauthorized' })
 
   try{
-    const packageId = req.params.id
+    const packageId = String(req.params.id || '')
 
     if (!packageId) {
       return res.status(400).json({ message: 'Package id is required' })
     }
 
-    const existingPackage = await Package.findById(packageId)
-
-    if(!existingPackage) return res.status(404).json({ message: 'Package not found' })
-
-    if (getPackageStatus(existingPackage) !== PACKAGE_STATUSES.approved) {
-      return res.status(403).json({ message: 'Only approved packages can be liked' })
-    }
-
-    const alreadyLikedPackage = await LikedPackage.findOne({
-      packageId,
-      userId: req.userId,
-    })
-
-    if (alreadyLikedPackage) {
-      return res.status(200).json({
-        message: 'Package already liked',
-        data: normalizePackageStatusForResponse(existingPackage),
-        alreadyLiked: true,
-      })
-    }
-
-    await LikedPackage.create({
-      packageId,
-      userId: req.userId,
-    })
-
-    return res.status(200).json({
-      message: 'Package liked successfully',
-      data: normalizePackageStatusForResponse(existingPackage),
-      alreadyLiked: false,
-    })
+    const result = await packageService.likePackage(packageId, req.userId)
+    return res.status(result.status).json(result.body)
   }
   catch(err: any){
     logger.error(err.message)
@@ -1695,33 +473,7 @@ const getLikedPackages = async (req: Request, res: Response) => {
   }
 
   try {
-    const REDIS_CACHE_KEY = `packages:liked:${req.userId}`
-    
-    const cached = await redis.get(REDIS_CACHE_KEY)
-    if (cached) {
-      logger.info('cache hit')
-      return res.status(200).json(JSON.parse(cached))
-    }
-
-    const likedRecords = await LikedPackage.find({ userId: req.userId }).lean()
-    
-    const packageIds = [...new Set(
-      likedRecords
-        .map(record => record.packageId)
-        .filter(Boolean)
-    )]
-
-    const packages = packageIds.length > 0
-      ? await Package.find({ _id: { $in: packageIds } })
-          .select(PUBLIC_PACKAGE_SAFE_SELECT)
-          .sort({ updatedAt: -1 })
-      : []
-
-    const response = { data: packages }
-
-    await redis.set(REDIS_CACHE_KEY, JSON.stringify(response), 'EX', REDIS_TTL)
-    logger.info('cache miss')
-    
+    const response = await packageService.getLikedPackages(req.userId)
     return res.status(200).json(response)
   } catch (error) {
     logger.error(`Error fetching liked packages: ${error}`)
