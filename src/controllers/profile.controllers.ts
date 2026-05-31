@@ -1,22 +1,11 @@
-import { updateUserSchema, validateSchema } from '../utils/validSchema';
+import { updateUserSchema, validateSchema } from '../utils/validSchema'
 
-import { Request, Response } from 'express';
-
-import redis from '../config/redis'
+import { Request, Response } from 'express'
 
 import logger from '../config/logger'
 
-import User from '../models/User'
-
-import { checkAdminRole } from '../utils/roleCheck'
-
-import UserPackageReveal from '../models/UserPackageReveal'
-
-import Package from '../models/Package'
-
-import uploadProfileImage, { getProfileImagePath, deleteOldProfileImage } from '../utils/uploadProfileImage'
-
-const REDIS_TTL = 3600
+import { getProfileImagePath } from '../utils/uploadProfileImage'
+import * as profileService from '../services/profile.service'
 
 const getProfiles = async (req: Request, res: Response) => {
   logger.info('getProfiles endpoint called')
@@ -25,32 +14,9 @@ const getProfiles = async (req: Request, res: Response) => {
     return res.status(401).json({ message: 'Unauthorized' })
   }
 
-  const roleCheck = await checkAdminRole(req.userId)
-
-  if (!roleCheck.ok) {
-    if (roleCheck.status === 500) {
-      logger.error(`Admin role check failed for user ${req.userId}: ${roleCheck.message}`)
-    }
-    return res.status(roleCheck.status).json({ message: roleCheck.message })
-  }
-
   try {
-    const REDIS_CACHE_KEY = 'profiles:list'
-
-    const cached = await redis.get(REDIS_CACHE_KEY)
-
-    if (cached) {
-      logger.info('cache hit')
-      return res.status(200).json(JSON.parse(cached))
-    }
-
-    const profiles = await User.find({})
-
-    await redis.set(REDIS_CACHE_KEY, JSON.stringify(profiles), 'EX', REDIS_TTL)
-
-    logger.info('cache miss')
-
-    return res.status(200).json(profiles)
+    const result = await profileService.getProfiles(req.userId)
+    return res.status(result.status).json(result.body)
   } catch (error) {
     logger.error(`Error fetching profiles: ${error}`)
     return res.status(500).json({ message: 'Failed to fetch profiles' })
@@ -58,37 +24,19 @@ const getProfiles = async (req: Request, res: Response) => {
 }
 
 const showProfile = async (req: Request, res: Response) => {
-  const REDIS_CACHE_KEY = `profile:${req.params.id}`
+  const profileId = String(req.params.id || '')
   
   try {
-    const cached = await redis.get(REDIS_CACHE_KEY)
-    if (cached) {
-      logger.info('cache hit')
-      return res.status(200).json(JSON.parse(cached))
-    }
-
-    const profile = await User.findById(req.params.id)
-    if (!profile) {
-      return res.status(404).json({ message: 'Profile not found' })
-    }
-
-    const response = {
-      profile,
-      ownProfile: req.userId === req.params.id,
-    }
-    
-    await redis.set(REDIS_CACHE_KEY, JSON.stringify(response), 'EX', REDIS_TTL)
-    logger.info('cache miss')
-    
-    return res.status(200).json(response)
+    const result = await profileService.showProfile(profileId, req.userId)
+    return res.status(result.status).json(result.body)
   } catch (error) {
-    logger.error(`Error fetching profile ${req.params.id}: ${error}`)
+    logger.error(`Error fetching profile ${profileId}: ${error}`)
     return res.status(500).json({ message: 'Failed to fetch profile' })
   }
 }
 
 const updateProfile = async (req: Request, res: Response) => {
-  const profileId = req.params.id
+  const profileId = String(req.params.id || '')
 
   if (!req.userId) {
     return res.status(401).json({ message: 'Unauthorized' })
@@ -99,7 +47,6 @@ const updateProfile = async (req: Request, res: Response) => {
   }
 
   try {
-    // Handle image upload if file is provided
     let profileImagePath: string | null = null
 
     if (req.file) {
@@ -108,21 +55,13 @@ const updateProfile = async (req: Request, res: Response) => {
       if (!profileImagePath) {
         return res.status(400).json({ message: 'Failed to process image upload' })
       }
-
-      // Get current user to delete old image
-      const currentUser = await User.findById(profileId)
-      if (currentUser?.profileImagePath) {
-        deleteOldProfileImage(currentUser.profileImagePath)
-      }
     }
 
-    // Prepare update data
     const updateData = {
       ...req.body,
       ...(profileImagePath && { profileImagePath }),
     }
 
-    // Validate the update data (excluding file field)
     const validation = validateSchema(updateUserSchema, updateData)
 
     if (!validation.success) {
@@ -132,27 +71,8 @@ const updateProfile = async (req: Request, res: Response) => {
       })
     }
 
-    // Update the profile
-    const updatedProfile = await User.findByIdAndUpdate(
-      profileId,
-      validation.data,
-      { new: true, runValidators: true }
-    ).select('-password')
-
-    if (!updatedProfile) {
-      return res.status(404).json({ message: 'Profile not found' })
-    }
-
-    logger.info(`Profile updated successfully for user ${profileId}`)
-
-    // Invalidate Redis cache for this profile and profiles list
-    await redis.del(`profile:${profileId}`)
-    await redis.del('profiles:list')
-
-    return res.status(200).json({
-      message: 'Profile updated successfully',
-      data: updatedProfile,
-    })
+    const result = await profileService.updateProfile(profileId, validation.data, profileImagePath)
+    return res.status(result.status).json(result.body)
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error'
     logger.error(`Error updating profile: ${errorMessage}`)
@@ -167,22 +87,19 @@ const deleteProfile = async (req: Request, res: Response) => {
     return res.status(401).json({ message: 'Unauthorized' })
   }
   
-  const profileId = req.params.id
+  const profileId = String(req.params.id || '')
 
   if (profileId !== req.userId) {
     return res.status(403).json({ message: 'Forbidden: you can delete only your profile' })
   }
 
-  const deletedProfile = await User.findByIdAndDelete(profileId)
-
-  if(!deletedProfile){
-    logger.info('Error while deleting profile')
+  try {
+    const result = await profileService.deleteProfile(profileId)
+    return res.status(result.status).json(result.body)
+  } catch (error) {
+    logger.error(`Error deleting profile: ${error}`)
+    return res.status(500).json({ message: 'Failed to delete profile' })
   }
-  else {
-    logger.info('Profile deleted successfully')
-  }
-
-  res.status(200).json({ message: 'deleteProfile working' })
 }
 
 const getRevealedPackages = async (req: Request, res: Response) => {
@@ -191,47 +108,8 @@ const getRevealedPackages = async (req: Request, res: Response) => {
   }
 
   try {
-    const userExists = await User.exists({ _id: req.userId })
-
-    if (!userExists) {
-      return res.status(404).json({ message: 'User not found' })
-    }
-
-    const revealRecords = await UserPackageReveal.find({ userId: req.userId }).lean()
-
-    if (revealRecords.length === 0) {
-      return res.status(200).json({
-        message: 'No revealed packages found',
-        data: [],
-      })
-    }
-
-    const packageIds = [
-      ...new Set(
-        revealRecords
-          .map((record) => record.packageId)
-          .filter((id): id is string => Boolean(id && id.trim()))
-      ),
-    ]
-
-    if (packageIds.length === 0) {
-      return res.status(200).json({
-        message: 'No valid revealed packages found',
-        data: [],
-      })
-    }
-
-    const packages = await Package.find({ _id: { $in: packageIds } })
-      .select('name coverImage destination budget duration season approved createdBy createdAt updatedAt')
-      .sort({ updatedAt: -1 })
-
-    const foundPackageIdSet = new Set(packages.map((pkg) => pkg._id.toString()))
-    const missingPackageIds = packageIds.filter((id) => !foundPackageIdSet.has(id))
-
-    return res.status(200).json({
-      message: 'User revealed packages fetched successfully',
-      data: packages,
-    })
+    const result = await profileService.getRevealedPackages(req.userId)
+    return res.status(result.status).json(result.body)
   } catch (error) {
     logger.error(`Error fetching revealed packages: ${error}`)
     return res.status(500).json({ message: 'Failed to fetch revealed packages' })
@@ -242,29 +120,8 @@ const getCreatedPackages = async(req: Request, res: Response) => {
   if(!req.userId) return res.status(401).json({ message: 'Unauthorized' })
 
   try{
-    const userId = req.userId
-
-    const REDIS_CACHE_KEY = `packages:created:${userId}`
-
-    const cached = await redis.get(REDIS_CACHE_KEY)
-
-    if (cached) {
-      logger.info('cache hit')
-      return res.status(200).json(JSON.parse(cached))
-    }
-
-    const userExists = await User.findById(userId)
-
-    if(!userExists) return res.status(404).json({ message: 'User not found' })
-
-    const createdPackages = await Package.find({ createdBy: userId }).select('_id name coverImage season budget destination duration startDate endDate')
-
-    const response = { createdPackages }
-
-    await redis.set(REDIS_CACHE_KEY, JSON.stringify(response), 'EX', REDIS_TTL)
-
-    logger.info('cache miss')
-    return res.status(200).json(response)
+    const result = await profileService.getCreatedPackages(req.userId)
+    return res.status(result.status).json(result.body)
   }
   catch(err: any){
     logger.error(err.message)
