@@ -17,6 +17,7 @@ import {
   revealPackage,
   submitPackageForApproval,
   unapprovePackage,
+  unlikePackage,
   updateDraftPackage,
   updatePackage,
   viewPackage,
@@ -76,5 +77,6 @@ privatePackageRoutes.patch('/reject-package/:id', rejectPackage)
 privatePackageRoutes.patch('/reveal-package/:id', revealPackage)
 privatePackageRoutes.get('/get-liked-packages', getLikedPackages)
 privatePackageRoutes.post('/like-package/:id', likePackage)
+privatePackageRoutes.delete('/unlike-package/:id', unlikePackage)
 
 export default privatePackageRoutes
