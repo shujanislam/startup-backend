@@ -957,6 +957,7 @@ export const likePackage = async (packageId: string, userId: string) => {
   }
 
   await LikedPackage.create({ packageId, userId })
+  await clearPackageCaches(packageId, userId)
 
   return {
     status: 200,
@@ -964,6 +965,26 @@ export const likePackage = async (packageId: string, userId: string) => {
       message: 'Package liked successfully',
       data: normalizePackageStatusForResponse(existingPackage),
       alreadyLiked: false,
+    },
+  }
+}
+
+export const unlikePackage = async (packageId: string, userId: string) => {
+  const existingPackage = await Package.findById(packageId)
+
+  if (!existingPackage) {
+    return { status: 404, body: { message: 'Package not found' } }
+  }
+
+  const result = await LikedPackage.deleteOne({ packageId, userId })
+  await clearPackageCaches(packageId, userId)
+
+  return {
+    status: 200,
+    body: {
+      message: result.deletedCount > 0 ? 'Package unliked successfully' : 'Package was not liked',
+      data: normalizePackageStatusForResponse(existingPackage),
+      wasLiked: result.deletedCount > 0,
     },
   }
 }

@@ -467,6 +467,25 @@ const likePackage = async(req: Request, res: Response) => {
   }
 } 
 
+const unlikePackage = async(req: Request, res: Response) => {
+  if(!req.userId) return res.status(401).json({ message: 'Unauthorized' })
+
+  try{
+    const packageId = String(req.params.id || '')
+
+    if (!packageId) {
+      return res.status(400).json({ message: 'Package id is required' })
+    }
+
+    const result = await packageService.unlikePackage(packageId, req.userId)
+    return res.status(result.status).json(result.body)
+  }
+  catch(err: any){
+    logger.error(err.message)
+    return res.status(500).json({ message: 'Failed to unlike package' })
+  }
+} 
+
 const getLikedPackages = async (req: Request, res: Response) => {
   if (!req.userId) {
     return res.status(401).json({ message: 'Unauthorized' })
@@ -505,4 +524,5 @@ export {
   revealPackage,
   getLikedPackages,
   likePackage,
+  unlikePackage,
 }
