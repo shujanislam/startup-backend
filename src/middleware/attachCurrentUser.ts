@@ -4,7 +4,7 @@ import redis from '../config/redis'
 
 import logger from '../config/logger'
 
-import User from '../models/User'
+import { ensureUserForFirebaseToken } from '../services/auth.service'
 
 const REDIS_TTL = 3600
 
@@ -23,11 +23,7 @@ export const attachCurrentUser = async(req: Request, res: Response, next: NextFu
       return next()
     }
 
-    const user = await User.findOne({ firebaseId: req.user.uid }).select('_id firebaseId email')
-
-    if (!user) {
-      return res.status(401).json({ message: 'User not found' })
-    }
+    const user = await ensureUserForFirebaseToken(req.user.uid, req.user.token)
 
     req.userId = user._id.toString()
     req.userDoc = user

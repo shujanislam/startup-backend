@@ -1,14 +1,14 @@
 import bcrypt from 'bcryptjs'
-import crypto from 'node:crypto'
 import type { Request, Response } from 'express'
 import { admin } from '../config/firebaseAdmin'
 import logger from '../config/logger'
 import User from '../models/User'
+import { ensureUserForFirebaseToken } from '../services/auth.service'
 import type { AuthenticatedRequest } from '../types/auth'
 import { createUserSchema, validateSchema } from '../utils/validSchema'
 import { checkAdminRole } from '../utils/roleCheck'
 
-const sanitizeUser = (user: { [key: string]: unknown }) => {
+const sanitizeUser = <T extends { password?: unknown }>(user: T) => {
 	const { password: _password, ...safeUser } = user
 	return safeUser
 }
@@ -185,25 +185,7 @@ const getCurrentUser = async (req: AuthenticatedRequest, res: Response) => {
 	}
 
 	try {
-		let user = await User.findOne({ firebaseId: req.user.uid })
-
-		if (!user) {
-			const tokenEmail = req.user.token.email || `${req.user.uid}@firebase.local`
-
-			const generatedPassword = crypto.randomBytes(18).toString('hex')
-			const hashedPassword = await bcrypt.hash(generatedPassword, 10)
-			const fallbackName =
-				req.user.token.name || tokenEmail.split('@')[0] || 'user'
-
-			user = await User.create({
-				firebaseId: req.user.uid,
-				name: fallbackName,
-				email: tokenEmail,
-				password: hashedPassword,
-				gender: 'prefer_not_to_say',
-			})
-		}
-
+		const user = await ensureUserForFirebaseToken(req.user.uid, req.user.token)
 		const safeUser = sanitizeUser(user.toObject())
 		const roleCheck = await checkAdminRole(user._id.toString())
 		const isAdmin = roleCheck.ok
@@ -231,52 +213,19 @@ const syncFirebaseUser = async (req: AuthenticatedRequest, res: Response) => {
 	}
 
 	try {
-		const existingUser = await User.findOne({ firebaseId: req.user.uid })
+		const user = await ensureUserForFirebaseToken(req.user.uid, req.user.token)
+		const safeUser = sanitizeUser(user.toObject())
+		const roleCheck = await checkAdminRole(user._id.toString())
+		const isAdmin = roleCheck.ok
+		await logAdminLogin(user, 'firebase-sync')
 
-		if (existingUser) {
-			await logAdminLogin(existingUser, 'firebase-sync')
-			const safeUser = sanitizeUser(existingUser.toObject())
-
-			return res.status(200).json({
-				message: 'User already synced',
-				user: {
-					...safeUser,
-					uid: existingUser.firebaseId,
-					email: existingUser.email,
-				},
-			})
-		}
-
-		const tokenEmail = req.user.token.email
-
-		if (!tokenEmail) {
-			return res.status(400).json({
-				message: 'Unable to sync user without email in Firebase token',
-			})
-		}
-
-		const generatedPassword = crypto.randomBytes(18).toString('hex')
-		const hashedPassword = await bcrypt.hash(generatedPassword, 10)
-		const fallbackName =
-			req.user.token.name || tokenEmail.split('@')[0] || 'user'
-
-		const createdUser = await User.create({
-			firebaseId: req.user.uid,
-			name: fallbackName,
-			email: tokenEmail,
-			password: hashedPassword,
-			gender: 'prefer_not_to_say',
-		})
-
-		const safeUser = sanitizeUser(createdUser.toObject())
-		await logAdminLogin(createdUser, 'firebase-sync')
-
-		return res.status(201).json({
+		return res.status(200).json({
 			message: 'User synced successfully',
 			user: {
 				...safeUser,
-				uid: createdUser.firebaseId,
-				email: createdUser.email,
+				uid: user.firebaseId,
+				email: user.email,
+				isAdmin,
 			},
 		})
 	} catch (error) {
